@@ -1,0 +1,49 @@
+{
+  "name": "codex-orch",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "bootstrap": "node scripts/dev/bootstrap.mjs",
+    "doctor": "node scripts/dev/doctor.mjs",
+    "dev": "next dev",
+    "dev:gui": "next dev",
+    "dev:agent": "node scripts/dev/run-agent.mjs",
+    "dev:cli": "tsx scripts/swarm-cli.ts run --mode local --max-rounds 3",
+    "dev:all": "concurrently -k -n GUI,AGENT \"npm run dev:gui\" \"npm run dev:agent\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build:python": "node scripts/dev/compile-python.mjs",
+    "build:web": "next build",
+    "build:all": "npm run typecheck && npm run build:web && npm run build:python",
+    "build": "npm run build:all",
+    "start": "next start",
+    "swarm:setup": "tsx scripts/swarm-cli.ts setup",
+    "swarm:run": "tsx scripts/swarm-cli.ts run",
+    "swarm:deploy": "tsx scripts/swarm-cli.ts deploy",
+    "models:discover": "tsx scripts/swarm-models.ts discover",
+    "models:optimize": "tsx scripts/swarm-models.ts optimize",
+    "models:evaluate": "tsx scripts/swarm-models.ts evaluate",
+    "models:show": "tsx scripts/swarm-models.ts show",
+    "batch:gen": "node scripts/batch/gen_shards.mjs",
+    "batch:run": "node scripts/batch/run_batches.mjs"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "dotenv": "^16.4.5",
+    "next": "^14.2.16",
+    "openai": "^4.68.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@types/node": "^20.17.57",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.1",
+    "concurrently": "^9.0.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.6.3"
+  }
+}

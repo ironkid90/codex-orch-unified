@@ -1,0 +1,11 @@
+# Pin SDK versions to keep Agent Framework APIs stable.
+agent-framework-azure-ai==1.0.0b260107
+agent-framework-core==1.0.0b260107
+azure-ai-agentserver-core==1.0.0b10
+azure-ai-agentserver-agentframework==1.0.0b10
+# 0.4.14 removed LLM_REQUEST_MODEL used by agent-framework 1.0.0b260107.
+opentelemetry-semantic-conventions-ai==0.4.13
+azure-identity
+python-dotenv
+debugpy
+agent-dev-cli

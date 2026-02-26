@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "ai_agents_swiss_knife": {
+      "command": "C:\\Users\\Admin\\Desktop\\codex-orch\\swiss-knife-venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "server.mcp_bridge",
+        "--base-url",
+        "http://127.0.0.1:8000"
+      ],
+      "env": {
+        "MCP_BASE_URL": "http://127.0.0.1:8000"
+      }
+    }
+  }
+}

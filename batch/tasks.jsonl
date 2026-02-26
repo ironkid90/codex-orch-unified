@@ -1,0 +1,5 @@
+{"task_id":"t0001","agent":"ProductManager","prompt":"Create a concise PRD for a MetaGPT-like multi-agent codegen framework built into our codex-orch repo. Target: Node/TS CLI + VS Code task integration. Include goals, non-goals, and 6 user stories."}
+{"task_id":"t0002","agent":"Architect","prompt":"Design the system architecture for the multi-agent batch pipeline (PRD -> design -> task plan -> code plan -> QA). Assume OpenAI Batch + /v1/responses + JSON schemas. Focus on modules and data flows."}
+{"task_id":"t0003","agent":"ProjectManager","prompt":"Break down tasks to deliver the batch pipeline MVP: shard generator, batch runner, artifact store, schema validation, VS Code tasks. Provide estimates and dependencies."}
+{"task_id":"t0004","agent":"Engineer","prompt":"Propose code_plan for integrating generated artifacts into the codex-orch repo: where to store artifacts, how to apply diffs, which scripts to run for validation, and how to keep runs idempotent."}
+{"task_id":"t0005","agent":"QA","prompt":"List edge cases and release blockers for the batch pipeline: upload failures, expired batches, schema drift, partial outputs, and token budget overruns."}

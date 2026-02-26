@@ -1,0 +1,139 @@
+{
+  "version": 1,
+  "updatedAt": "2026-02-26T07:43:34.125Z",
+  "source": "swarm-models optimize (heuristic)",
+  "probes": [
+    {
+      "candidateId": "codex-primary",
+      "provider": "codex",
+      "model": "codex-5.3",
+      "available": true,
+      "detail": "Codex CLI detected (OAuth login handled by codex CLI session)."
+    },
+    {
+      "candidateId": "openai-primary",
+      "provider": "openai",
+      "model": "gpt-5.2",
+      "available": true,
+      "detail": "Credentials found (live probe disabled)."
+    },
+    {
+      "candidateId": "gemini-pro",
+      "provider": "gemini",
+      "model": "gemini-3.1-pro-preview",
+      "available": true,
+      "detail": "Credentials found (live probe disabled)."
+    },
+    {
+      "candidateId": "gemini-fast",
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-preview",
+      "available": true,
+      "detail": "Credentials found (live probe disabled)."
+    }
+  ],
+  "assignments": {
+    "research": {
+      "provider": "gemini",
+      "model": "gemini-3.1-pro-preview",
+      "score": 100.08,
+      "rationale": "Credentials found (live probe disabled)."
+    },
+    "worker1": {
+      "provider": "codex",
+      "model": "codex-5.3",
+      "score": 101.83,
+      "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
+    },
+    "worker2": {
+      "provider": "openai",
+      "model": "gpt-5.2",
+      "score": 100.20000000000002,
+      "rationale": "Credentials found (live probe disabled)."
+    },
+    "evaluator": {
+      "provider": "openai",
+      "model": "gpt-5.2",
+      "score": 100.02000000000001,
+      "rationale": "Credentials found (live probe disabled)."
+    },
+    "coordinator": {
+      "provider": "openai",
+      "model": "gpt-5.2",
+      "score": 100.03999999999999,
+      "rationale": "Credentials found (live probe disabled)."
+    }
+  },
+  "fallback": {
+    "research": [
+      {
+        "provider": "gemini",
+        "model": "gemini-3.1-flash-preview",
+        "score": 98.31,
+        "rationale": "Credentials found (live probe disabled)."
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-5.2",
+        "score": 95.03999999999999,
+        "rationale": "Credentials found (live probe disabled)."
+      }
+    ],
+    "worker1": [
+      {
+        "provider": "openai",
+        "model": "gpt-5.2",
+        "score": 98.94000000000001,
+        "rationale": "Credentials found (live probe disabled)."
+      },
+      {
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "score": 96.33999999999999,
+        "rationale": "Credentials found (live probe disabled)."
+      }
+    ],
+    "worker2": [
+      {
+        "provider": "codex",
+        "model": "codex-5.3",
+        "score": 98.92,
+        "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
+      },
+      {
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "score": 98.44000000000001,
+        "rationale": "Credentials found (live probe disabled)."
+      }
+    ],
+    "evaluator": [
+      {
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "score": 99.68,
+        "rationale": "Credentials found (live probe disabled)."
+      },
+      {
+        "provider": "codex",
+        "model": "codex-5.3",
+        "score": 97.01,
+        "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
+      }
+    ],
+    "coordinator": [
+      {
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "score": 99.5,
+        "rationale": "Credentials found (live probe disabled)."
+      },
+      {
+        "provider": "gemini",
+        "model": "gemini-3.1-flash-preview",
+        "score": 96.53999999999999,
+        "rationale": "Credentials found (live probe disabled)."
+      }
+    ]
+  }
+}

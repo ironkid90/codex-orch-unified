@@ -1,0 +1,145 @@
+{
+  "ProductManager": {
+    "system": "You are ProductManager. Produce a concise PRD JSON. Focus on problem, scope, goals, non-goals, and 5–8 user stories with acceptance criteria.",
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "prd",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "title": { "type": "string" },
+            "problem": { "type": "string" },
+            "goals": { "type": "array", "items": { "type": "string" } },
+            "non_goals": { "type": "array", "items": { "type": "string" } },
+            "user_stories": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "as_a": { "type": "string" },
+                  "i_want": { "type": "string" },
+                  "so_that": { "type": "string" },
+                  "acceptance": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["as_a", "i_want", "so_that", "acceptance"]
+              }
+            }
+          },
+          "required": ["title", "problem", "goals", "non_goals", "user_stories"]
+        },
+        "strict": true
+      }
+    },
+    "max_output_tokens": 900
+  },
+  "Architect": {
+    "system": "You are Architect. Output system_design JSON including modules, interfaces, data_flows, risks, and constraints. Be implementable in a Node/TS monorepo.",
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "design",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "architecture_style": { "type": "string" },
+            "modules": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "responsibilities": { "type": "array", "items": { "type": "string" } },
+                  "public_api": { "type": "array", "items": { "type": "string" } },
+                  "tech": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["name", "responsibilities"]
+              }
+            },
+            "data_flows": { "type": "array", "items": { "type": "string" } },
+            "constraints": { "type": "array", "items": { "type": "string" } },
+            "risks": { "type": "array", "items": { "type": "string" } }
+          },
+          "required": ["modules", "data_flows"]
+        },
+        "strict": true
+      }
+    },
+    "max_output_tokens": 1000
+  },
+  "ProjectManager": {
+    "system": "You are ProjectManager. Produce task_plan JSON with milestones, work_items, owners, estimates (hours), and dependencies.",
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "task_plan",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "milestones": { "type": "array", "items": { "type": "string" } },
+            "work_items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "title": { "type": "string" },
+                  "owner": { "type": "string" },
+                  "estimate_hours": { "type": "number" },
+                  "depends_on": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["id", "title", "estimate_hours"]
+              }
+            }
+          },
+          "required": ["work_items"]
+        },
+        "strict": true
+      }
+    },
+    "max_output_tokens": 1000
+  },
+  "Engineer": {
+    "system": "You are Engineer. Produce code_plan JSON with files_to_create, files_to_modify, diffs (unified), tests_to_run, and rationale. Do not invent binaries.",
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "code_plan",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "files_to_create": { "type": "array", "items": { "type": "string" } },
+            "files_to_modify": { "type": "array", "items": { "type": "string" } },
+            "diffs": { "type": "array", "items": { "type": "string" } },
+            "tests_to_run": { "type": "array", "items": { "type": "string" } },
+            "rationale": { "type": "string" }
+          },
+          "required": ["diffs", "tests_to_run"]
+        },
+        "strict": true
+      }
+    },
+    "max_output_tokens": 1400
+  },
+  "QA": {
+    "system": "You are QA. Produce qa_report JSON with test_matrix, edge_cases, failure_modes, and release_blockers.",
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "qa_report",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "test_matrix": { "type": "array", "items": { "type": "string" } },
+            "edge_cases": { "type": "array", "items": { "type": "string" } },
+            "failure_modes": { "type": "array", "items": { "type": "string" } },
+            "release_blockers": { "type": "array", "items": { "type": "string" } }
+          },
+          "required": ["test_matrix", "edge_cases"]
+        },
+        "strict": true
+      }
+    },
+    "max_output_tokens": 900
+  }
+}

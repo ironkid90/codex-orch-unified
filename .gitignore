@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Local env and secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual environments
+.venv/
+venv/
+**/.venv/
+
+# Build and runtime outputs
+.next/
+out/
+dist/
+build/
+output/
+runs/
+coverage/
+
+# Tool caches
+.netlify/
+.playwright-cli/
+.playwright/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# TypeScript
+*.tsbuildinfo
+
+# Python packaging
+*.egg-info/
+
+# Archives and binaries
+*.rar
+*.zip
+*.7z
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+.vscode/*.log
