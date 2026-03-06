@@ -1,7 +1,7 @@
 # TASKS_UNIVERSAL.md — Work Units for ANY Model in ANY IDE
 ## Dynamic Capability-Aware Task Assignment
 
-> **This replaces the model-specific TASKS_*.md files.** Use this as the single source of truth for all work units. The orchestrator assigns work units to models dynamically based on capability scores.
+> **This file defines the canonical work unit specifications across models.** Per-model `TASKS_*.md` files provide model-specific implementation guidance for agents assigned to those models. Use this as the single source of truth for work unit definitions; the orchestrator assigns work units to models dynamically based on capability scores.
 
 ---
 
