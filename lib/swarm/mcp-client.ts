@@ -26,6 +26,16 @@ export interface ConnectedServer {
     tools: any[];
 }
 
+function normalizeEnv(env: NodeJS.ProcessEnv | Record<string, string>): Record<string, string> {
+    const normalized: Record<string, string> = {};
+    for (const [key, value] of Object.entries(env)) {
+        if (typeof value === "string") {
+            normalized[key] = value;
+        }
+    }
+    return normalized;
+}
+
 export class McpClientManager {
     private servers: Map<string, ConnectedServer> = new Map();
 
@@ -61,7 +71,10 @@ export class McpClientManager {
                 transport = new StdioClientTransport({
                     command: config.command,
                     args: config.args || [],
-                    env: { ...process.env, ...(config.env || {}) },
+                    env: {
+                        ...normalizeEnv(process.env),
+                        ...normalizeEnv(config.env || {}),
+                    },
                 });
             } else if (config.url) {
                 transport = new SSEClientTransport(new URL(config.url));

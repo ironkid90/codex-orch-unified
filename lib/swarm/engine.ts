@@ -14,6 +14,15 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import OpenAI from "openai";
+import { createProvider } from "../providers/factory";
+import type {
+  Message as ProviderMessage,
+  ProviderConfig as UnifiedProviderConfig,
+  ToolCall as ProviderToolCall,
+  ToolDefinition as ProviderToolDefinition,
+} from "../providers/types";
+import { createDefaultToolRegistry, executeToolCall } from "../tools";
+import type { ToolContext as AgentToolContext } from "../tools";
 
 import {
   compressForContext,
@@ -28,6 +37,7 @@ import {
   loadRoutingConfig,
   resolveRoleExecution,
   summarizeRouting,
+  type ProviderId,
   type RoleExecutionPreference,
 } from "./model-routing";
 import { swarmStore } from "./store";
@@ -49,6 +59,9 @@ const RUNS_DIR = path.join(PROJECT_ROOT, "runs");
 const CHECKPOINTS_DIR = path.join(RUNS_DIR, "checkpoints");
 const MESSAGE_FILE = "messages.jsonl";
 const MAX_ALLOWED_ROUNDS = 8;
+const DEFAULT_TOOL_MAX_STEPS = 6;
+const DEFAULT_PROVIDER_MAX_OUTPUT_TOKENS = 2200;
+const defaultToolRegistry = createDefaultToolRegistry();
 
 const CHECKPOINT_TARGETS = [
   "app",
@@ -1123,16 +1136,215 @@ async function runGeminiTask(task: AgentTask): Promise<void> {
   await writeFile(task.outFile, text, "utf8");
 }
 
+function resolveGeminiCompatibleBaseUrl(): string | undefined {
+  if (process.env.GEMINI_OPENAI_BASE_URL) {
+    return process.env.GEMINI_OPENAI_BASE_URL;
+  }
+  const candidate = process.env.GEMINI_BASE_URL;
+  if (candidate && candidate.toLowerCase().includes("openai")) {
+    return candidate;
+  }
+  return undefined;
+}
+
+function buildUnifiedProviderConfig(task: AgentTask, provider: Exclude<ProviderId, "codex">): UnifiedProviderConfig {
+  const modelOverride = task.execution?.model;
+  const maxTokens = parseClampedInt(
+    process.env.SWARM_PROVIDER_MAX_OUTPUT_TOKENS,
+    DEFAULT_PROVIDER_MAX_OUTPUT_TOKENS,
+    256,
+    16384,
+  );
+
+  if (provider === "openai") {
+    return {
+      type: "openai",
+      model: modelOverride || process.env.OPENAI_SWARM_MODEL || process.env.OPENAI_MODEL || "gpt-4o",
+      apiKey: process.env.OPENAI_API_KEY,
+      baseUrl: process.env.OPENAI_BASE_URL,
+      maxTokens,
+      temperature: 0.2,
+    };
+  }
+
+  if (provider === "gemini") {
+    return {
+      type: "gemini",
+      model: modelOverride || process.env.GEMINI_SWARM_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash",
+      apiKey: process.env.GEMINI_API_KEY,
+      baseUrl: resolveGeminiCompatibleBaseUrl(),
+      maxTokens,
+      temperature: 0.2,
+    };
+  }
+
+  if (provider === "anthropic") {
+    return {
+      type: "anthropic",
+      model: modelOverride || process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5",
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      baseUrl: process.env.ANTHROPIC_BASE_URL,
+      maxTokens,
+      temperature: 0.2,
+    };
+  }
+
+  return {
+    type: "ollama",
+    model: modelOverride || process.env.OLLAMA_MODEL || "llama3.2",
+    baseUrl: process.env.OLLAMA_HOST ?? process.env.OLLAMA_BASE_URL ?? "http://localhost:11434",
+    maxTokens,
+    temperature: 0.2,
+  };
+}
+
+function getRegisteredToolDefinitions(): ProviderToolDefinition[] {
+  return [...defaultToolRegistry.values()].map((tool) => {
+    const properties: ProviderToolDefinition["parameters"]["properties"] = {};
+    for (const [name, prop] of Object.entries(tool.parameters.properties)) {
+      properties[name] = {
+        type: prop.type,
+        description: prop.description,
+        ...(prop.enum ? { enum: prop.enum } : {}),
+        ...(prop.items ? { items: prop.items } : {}),
+      };
+    }
+
+    return {
+      name: tool.name,
+      description: tool.description,
+      parameters: {
+        type: "object",
+        properties,
+        ...(tool.parameters.required ? { required: [...tool.parameters.required] } : {}),
+      },
+    };
+  });
+}
+
+function parseToolArguments(raw: string): Record<string, unknown> {
+  const parsed = safeJsonParse(raw);
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return parsed as Record<string, unknown>;
+  }
+  return {};
+}
+
+function createToolContext(task: AgentTask): AgentToolContext {
+  const state = swarmStore.getState();
+  return {
+    workspaceRoot: task.workspace,
+    agentId: task.agentId,
+    runId: state.runId || "standalone",
+    round: task.round,
+    allowedPaths: [task.workspace],
+    maxFileSize: parseClampedInt(process.env.SWARM_TOOL_MAX_FILE_SIZE, 800_000, 1024, 50_000_000),
+    shellTimeout: parseClampedInt(process.env.SWARM_TOOL_SHELL_TIMEOUT_MS, 20_000, 1000, 600_000),
+  };
+}
+
+async function runUnifiedProviderTask(task: AgentTask, providerId: Exclude<ProviderId, "codex">): Promise<void> {
+  const provider = createProvider(buildUnifiedProviderConfig(task, providerId));
+  const enableTools = process.env.SWARM_ENABLE_TOOLS !== "0";
+  const toolDefinitions = enableTools ? getRegisteredToolDefinitions() : [];
+  const maxToolSteps = parseClampedInt(process.env.SWARM_TOOL_MAX_STEPS, DEFAULT_TOOL_MAX_STEPS, 1, 24);
+  const maxTokens = parseClampedInt(
+    process.env.SWARM_PROVIDER_MAX_OUTPUT_TOKENS,
+    DEFAULT_PROVIDER_MAX_OUTPUT_TOKENS,
+    256,
+    16384,
+  );
+
+  const messages: ProviderMessage[] = [{ role: "user", content: task.prompt }];
+  const toolContext = createToolContext(task);
+  let finalText = "";
+
+  for (let step = 0; step <= maxToolSteps; step++) {
+    const completion = await provider.complete({
+      messages,
+      tools: toolDefinitions.length ? toolDefinitions : undefined,
+      temperature: 0.2,
+      maxTokens,
+    });
+
+    if (completion.content.trim()) {
+      finalText = completion.content;
+    }
+
+    const assistantMessage: ProviderMessage = {
+      role: "assistant",
+      content: completion.content,
+      ...(completion.toolCalls?.length ? { toolCalls: completion.toolCalls } : {}),
+    };
+    messages.push(assistantMessage);
+
+    if (!completion.toolCalls?.length || !toolDefinitions.length) {
+      break;
+    }
+
+    if (step === maxToolSteps) {
+      throw new Error(`Tool loop limit reached (${maxToolSteps}) for ${task.agentId}.`);
+    }
+
+    for (const toolCall of completion.toolCalls) {
+      swarmStore.appendEvent({
+        type: "agent.tool_call",
+        round: task.round,
+        agentId: task.agentId,
+        message: `${task.agentId} calling tool ${toolCall.name}.`,
+        metadata: { tool: toolCall.name, provider: providerId },
+      });
+
+      const args = parseToolArguments(toolCall.arguments);
+      const result = await executeToolCall(defaultToolRegistry, toolCall.name, args, toolContext);
+      const toolOutput = result.success ? result.output : `ERROR: ${result.error || result.output}`;
+      messages.push({
+        role: "tool",
+        name: toolCall.name,
+        toolCallId: toolCall.id,
+        content: toolOutput,
+      });
+
+      swarmStore.appendEvent({
+        type: "agent.tool_result",
+        round: task.round,
+        agentId: task.agentId,
+        level: result.success ? "info" : "warn",
+        message: `${toolCall.name} ${result.success ? "succeeded" : "failed"}.`,
+        metadata: {
+          tool: toolCall.name,
+          provider: providerId,
+          success: result.success,
+        },
+      });
+    }
+  }
+
+  await writeFile(task.outFile, finalText.trim() ? finalText : "(empty response)", "utf8");
+}
+
 async function runProviderTask(task: AgentTask): Promise<void> {
   const provider = task.execution?.provider || "codex";
-  if (provider === "openai") {
+  if (provider === "codex") {
+    await runCodexTask(task);
+    return;
+  }
+
+  if (provider === "openai" && !process.env.OPENAI_API_KEY && process.env.OPENAI_OAUTH_ACCESS_TOKEN) {
     await runOpenAITask(task);
     return;
   }
-  if (provider === "gemini") {
+
+  if (provider === "gemini" && !process.env.GEMINI_API_KEY) {
     await runGeminiTask(task);
     return;
   }
+
+  if (provider === "openai" || provider === "gemini" || provider === "anthropic" || provider === "ollama") {
+    await runUnifiedProviderTask(task, provider);
+    return;
+  }
+
   await runCodexTask(task);
 }
 

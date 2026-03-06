@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { AgentId } from "./types";
 
-export type ProviderId = "codex" | "openai" | "gemini";
+export type ProviderId = "codex" | "openai" | "gemini" | "anthropic" | "ollama";
 
 export interface RoleExecutionPreference {
   provider: ProviderId;
@@ -48,7 +48,13 @@ export function normalizeRoleExecution(value: unknown): RoleExecutionPreference 
   }
   const maybe = value as RoleExecutionPreference;
   const provider = typeof maybe.provider === "string" ? maybe.provider.toLowerCase() : "";
-  if (provider !== "codex" && provider !== "openai" && provider !== "gemini") {
+  if (
+    provider !== "codex" &&
+    provider !== "openai" &&
+    provider !== "gemini" &&
+    provider !== "anthropic" &&
+    provider !== "ollama"
+  ) {
     return null;
   }
   return {

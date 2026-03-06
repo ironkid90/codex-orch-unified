@@ -24,29 +24,26 @@ const DEFAULT_FEATURES: SwarmFeatures = {
   approveNextActionGate: false,
 };
 
-function eventBadge(status: string): { text: string; cls: string } {
-  if (status === "PASS") {
-    return { text: "Pass", cls: "ok" };
-  }
-  if (status === "FAIL") {
-    return { text: "Fail", cls: "err" };
-  }
-  if (status === "REVISE") {
-    return { text: "Revise", cls: "warn" };
-  }
+function statusBadge(status: string): { text: string; cls: string } {
+  if (status === "PASS") return { text: "Pass", cls: "ok" };
+  if (status === "FAIL") return { text: "Fail", cls: "err" };
+  if (status === "REVISE") return { text: "Revise", cls: "warn" };
   return { text: status || "Idle", cls: "info" };
 }
 
-function phaseClass(phase: AgentState["phase"]): string {
-  return `pill ${phase}`;
-}
-
 function formatTime(iso?: string): string {
-  if (!iso) {
-    return "-";
-  }
+  if (!iso) return "—";
   return new Date(iso).toLocaleTimeString();
 }
+
+const AGENT_COLORS: Record<string, string> = {
+  research: "from-research",
+  worker1: "from-worker1",
+  worker2: "from-worker2",
+  evaluator: "from-evaluator",
+  coordinator: "from-coordinator",
+  system: "from-system",
+};
 
 export default function HomePage() {
   const [state, setState] = useState<SwarmRunState | null>(null);
@@ -61,23 +58,17 @@ export default function HomePage() {
 
   const loadState = useCallback(async () => {
     const res = await fetch("/api/swarm/state", { cache: "no-store" });
-    if (!res.ok) {
-      throw new Error(`Failed to load state: ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`Failed to load state: ${res.status}`);
     const data = (await res.json()) as StateResponse;
     setState(data.state);
     setFeatures(data.state.features);
     setSupportsLocal(data.capabilities.supportsLocalExecution);
     setSupportsPauseResume(data.capabilities.supportsPauseResume);
     setSupportsRewind(data.capabilities.supportsRewind);
-    if (!data.capabilities.supportsLocalExecution) {
-      setMode("demo");
-    }
+    if (!data.capabilities.supportsLocalExecution) setMode("demo");
   }, []);
 
-  useEffect(() => {
-    void loadState();
-  }, [loadState]);
+  useEffect(() => { void loadState(); }, [loadState]);
 
   useEffect(() => {
     const source = new EventSource("/api/swarm/stream");
@@ -87,20 +78,11 @@ export default function HomePage() {
         const nextState = JSON.parse(message.data) as SwarmRunState;
         setState(nextState);
         setError(null);
-      } catch {
-        // ignore malformed event
-      }
+      } catch { /* ignore */ }
     };
-
     source.addEventListener("state", onState);
-    source.onerror = () => {
-      setError("Stream interrupted. Reconnecting...");
-    };
-
-    return () => {
-      source.removeEventListener("state", onState);
-      source.close();
-    };
+    source.onerror = () => setError("Stream interrupted. Reconnecting...");
+    return () => { source.removeEventListener("state", onState); source.close(); };
   }, []);
 
   const startRun = useCallback(async () => {
@@ -112,11 +94,8 @@ export default function HomePage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ maxRounds, mode, features }),
       });
-
       const payload = (await res.json()) as { error?: string };
-      if (!res.ok) {
-        throw new Error(payload.error || "Unable to start run.");
-      }
+      if (!res.ok) throw new Error(payload.error || "Unable to start run.");
       await loadState();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -135,9 +114,7 @@ export default function HomePage() {
         body: JSON.stringify({ action, round }),
       });
       const payload = (await res.json()) as { error?: string };
-      if (!res.ok) {
-        throw new Error(payload.error || `Failed control action: ${action}`);
-      }
+      if (!res.ok) throw new Error(payload.error || `Failed: ${action}`);
       await loadState();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -147,121 +124,161 @@ export default function HomePage() {
   }, [loadState]);
 
   const latestEvents = useMemo(() => {
-    if (!state) {
-      return [];
-    }
+    if (!state) return [];
     return [...state.events].reverse().slice(0, 140);
   }, [state]);
 
   const latestMessages = useMemo(() => {
-    if (!state) {
-      return [];
-    }
+    if (!state) return [];
     return [...state.messages].reverse().slice(0, 80);
   }, [state]);
 
-  const runBadge = eventBadge(state?.rounds.at(-1)?.status ?? "IDLE");
+  const runBadge = statusBadge(state?.rounds.at(-1)?.status ?? "IDLE");
   const isRunning = Boolean(state?.running);
   const latestCheckpointRound = state?.checkpoints.at(-1)?.round;
+  const agents = state ? Object.values(state.agents) : [];
 
   const toggleFeature = useCallback((feature: keyof SwarmFeatures) => {
-    if (isRunning) {
-      return;
-    }
+    if (isRunning) return;
     setFeatures((prev) => ({ ...prev, [feature]: !prev[feature] }));
   }, [isRunning]);
 
   return (
-    <main className="shell">
-      <div className="boardFrame">
-        <section className="brandBanner">
-          <div className="brandStrip">
-            <div className="handLogo">HAND</div>
-            <div className="brandName">human aid &amp; development</div>
-            <div className="brandDivider" />
-            <div className="brandTagline">Children are the future</div>
-          </div>
-          <h1 className="title">Humanitarian Operations Dashboard</h1>
-          <p className="subtitle">
-            Operational analytics across swarm attempts, outcomes, checkpoints, and timeline
-            movement, built for full-screen decision support and continuous refresh.
-          </p>
-        </section>
-
-        <div className="top">
-          <div>
-            <h2 className="title" style={{ fontSize: "1.7rem" }}>
-              Real-Time Swarm Control
-            </h2>
-            <p className="subtitle">
-              Coordinator, evaluator, and workers running in synchronized rounds with live telemetry.
-            </p>
-          </div>
-
-          <div className="controls">
-          <label className="tiny mono">
-            Max rounds
-            <input
-              type="number"
-              min={1}
-              max={8}
-              value={maxRounds}
-              onChange={(event) => setMaxRounds(Number(event.target.value) || 1)}
-              disabled={isRunning}
-            />
-          </label>
-
-          <label className="tiny mono">
-            Mode
-            <select
-              value={mode}
-              onChange={(event) => setMode(event.target.value as RunMode)}
-              disabled={isRunning}
-            >
-              {supportsLocal && <option value="local">Local runner</option>}
-              <option value="demo">Demo/replay</option>
-            </select>
-          </label>
-
-          <button className="btn" onClick={() => void startRun()} disabled={busy || isRunning}>
-            {isRunning ? "Run in progress" : "Start swarm"}
-          </button>
-
-          {supportsPauseResume && isRunning && !state?.paused && (
-            <button className="btn alt" onClick={() => void controlRun("pause")} disabled={busy}>
-              Pause
-            </button>
-          )}
-          {supportsPauseResume && isRunning && state?.paused && (
-            <button className="btn alt" onClick={() => void controlRun("resume")} disabled={busy}>
-              Resume
-            </button>
-          )}
-          {supportsRewind && state?.paused && latestCheckpointRound && (
-            <button
-              className="btn alt"
-              onClick={() => void controlRun("rewind", latestCheckpointRound)}
-              disabled={busy}
-            >
-              Rewind r{latestCheckpointRound}
-            </button>
-          )}
+    <div className="platform">
+      {/* ═══ HEADER ═══ */}
+      <header className="header">
+        <div className="header-brand">
+          <div className="header-logo">CX</div>
+          <div className="header-title">
+            Codex Orchestrator
+            <span>v2</span>
           </div>
         </div>
 
-        <div className="meta">
-          Run ID: {state?.runId ?? "-"} | Mode: {state?.mode ?? "-"} | Round: {state?.currentRound ?? 0} |
-          Paused: {state?.paused ? "yes" : "no"}
+        <div className="header-meta">
+          <span>ID: {state?.runId?.slice(0, 8) ?? "—"}</span>
+          <span className="sep">|</span>
+          <span>Mode: {state?.mode ?? "—"}</span>
+          <span className="sep">|</span>
+          <span>Round: {state?.currentRound ?? 0}/{state?.maxRounds ?? "—"}</span>
+          <span className="sep">|</span>
+          <span>{state?.paused ? "⏸ Paused" : isRunning ? "● Live" : "○ Idle"}</span>
         </div>
 
-        <section className="card featurePanel">
-          <div className="cardHead">
+        <div className="header-controls">
+          <div className="control-bar">
+            <label className="control-label">
+              Rounds
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={8}
+                value={maxRounds}
+                onChange={(e) => setMaxRounds(Number(e.target.value) || 1)}
+                disabled={isRunning}
+                style={{ width: 52 }}
+              />
+            </label>
+
+            <label className="control-label">
+              Mode
+              <select
+                className="select"
+                value={mode}
+                onChange={(e) => setMode(e.target.value as RunMode)}
+                disabled={isRunning}
+              >
+                {supportsLocal && <option value="local">Local</option>}
+                <option value="demo">Demo</option>
+              </select>
+            </label>
+
+            <button className="btn btn-primary" onClick={() => void startRun()} disabled={busy || isRunning}>
+              {isRunning ? "● Running" : "▶ Start Swarm"}
+            </button>
+
+            {supportsPauseResume && isRunning && !state?.paused && (
+              <button className="btn btn-secondary" onClick={() => void controlRun("pause")} disabled={busy}>
+                ⏸ Pause
+              </button>
+            )}
+            {supportsPauseResume && isRunning && state?.paused && (
+              <button className="btn btn-secondary" onClick={() => void controlRun("resume")} disabled={busy}>
+                ▶ Resume
+              </button>
+            )}
+            {supportsRewind && state?.paused && latestCheckpointRound && (
+              <button
+                className="btn btn-secondary"
+                onClick={() => void controlRun("rewind", latestCheckpointRound)}
+                disabled={busy}
+              >
+                ↻ Rewind r{latestCheckpointRound}
+              </button>
+            )}
+          </div>
+        </div>
+      </header>
+
+      {/* ═══ SIDEBAR — Agent Roster ═══ */}
+      <aside className="sidebar">
+        <div className="sidebar-label">Agents</div>
+        {agents.map((agent) => (
+          <div key={agent.id} className="agent-card">
+            <div className="agent-card-head">
+              <span className="agent-name">
+                <span className={`status-dot ${agent.phase}`} />
+                {agent.label}
+              </span>
+              <span className={`phase-pill ${agent.phase}`}>{agent.phase}</span>
+            </div>
+            <div className="agent-detail">
+              R{agent.round} · PDA: {agent.pdaStage || "—"} · {agent.taskTarget || "—"}
+              <br />
+              {formatTime(agent.startedAt)} → {formatTime(agent.endedAt)}
+            </div>
+            {agent.excerpt && (
+              <div className="agent-detail" style={{ marginTop: 4, color: "var(--text-secondary)" }}>
+                {agent.excerpt}
+              </div>
+            )}
+          </div>
+        ))}
+
+        <div className="sidebar-label" style={{ marginTop: 12 }}>Checkpoints</div>
+        {state?.checkpoints.length ? (
+          state.checkpoints.map((cp) => (
+            <div key={cp.round} className="agent-card">
+              <div className="agent-detail">
+                R{cp.round} · {cp.restorable ? "✓ Restorable" : "✗ Locked"}
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="empty-text" style={{ padding: "0 10px" }}>No checkpoints</div>
+        )}
+      </aside>
+
+      {/* ═══ MAIN CONTENT ═══ */}
+      <main className="main-content">
+        {/* Error Banner */}
+        {error && (
+          <div className="error-banner">
+            <strong>Error</strong>
+            <p>{error}</p>
+          </div>
+        )}
+
+        {/* Feature Toggles */}
+        <section className="glass-card feature-panel">
+          <div className="glass-card-head">
             <h2>Runtime Features</h2>
-            <span className="badge info">{isRunning ? "locked" : "editable"}</span>
+            <span className={`badge ${isRunning ? "warn" : "info"}`}>{isRunning ? "locked" : "editable"}</span>
           </div>
-          <div className="featureGrid tiny mono">
+          <div className="feature-grid">
             {Object.entries(features).map(([name, value]) => (
-              <label key={name} className="featureToggle">
+              <label key={name} className="feature-toggle">
                 <input
                   type="checkbox"
                   checked={Boolean(value)}
@@ -274,81 +291,66 @@ export default function HomePage() {
           </div>
         </section>
 
-        {error && (
-          <div className="card" style={{ marginBottom: 12, borderColor: "rgba(255,109,109,0.4)" }}>
-            <strong>Error</strong>
-            <p className="eventMsg">{error}</p>
+        {/* Agent Pipeline */}
+        <section className="glass-card">
+          <div className="glass-card-head">
+            <h2>Agent Pipeline</h2>
+            <span className={`badge ${runBadge.cls}`}>{runBadge.text}</span>
           </div>
-        )}
+          <div className="pipeline">
+            {agents.map((agent, i) => (
+              <div key={agent.id} style={{ display: "flex", alignItems: "center" }}>
+                {i > 0 && <div className="pipeline-connector" />}
+                <div className="pipeline-agent">
+                  <div className="agent-name">
+                    <span className={`status-dot ${agent.phase}`} />
+                    {agent.label}
+                  </div>
+                  <div className="agent-detail" style={{ marginTop: 4 }}>
+                    {agent.phase} · R{agent.round}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
 
-        <div className="grid main">
-          <section className="card">
-            <div className="cardHead">
-              <h2>Comprehensive Trend Analysis</h2>
-              <span className={`badge ${runBadge.cls}`}>{runBadge.text}</span>
+        {/* Main Grid: Thought Stream + Events */}
+        <div className="content-grid">
+          {/* Thought Stream */}
+          <section className="glass-card">
+            <div className="glass-card-head">
+              <h2>Agent Thought Stream</h2>
+              <span className="badge info">{latestMessages.length} messages</span>
             </div>
-            <div className="agents">
-              {state &&
-                Object.values(state.agents).map((agent) => (
-                  <article key={agent.id} className="agent">
-                    <div className="agentHead">
-                      <span className="agentName">{agent.label}</span>
-                      <span className={phaseClass(agent.phase)}>{agent.phase}</span>
+            <div className="thought-stream">
+              {latestMessages.length ? (
+                latestMessages.map((item, index) => (
+                  <article
+                    key={`${item.timestampUtc}-${index}`}
+                    className={`thought-bubble ${AGENT_COLORS[item.from] || "from-system"}`}
+                  >
+                    <div className="thought-meta">
+                      <span className="thought-agent-tag">{item.from}</span>
+                      → {item.to}
+                      <span style={{ marginLeft: "auto" }}>
+                        {new Date(item.timestampUtc).toLocaleTimeString()} · R{item.round} · {item.type}
+                      </span>
                     </div>
-                    <div className="tiny mono">
-                      Round {agent.round} | PDA: {agent.pdaStage || "-"} | target: {agent.taskTarget || "-"}
-                    </div>
-                    <div className="tiny mono">
-                      start {formatTime(agent.startedAt)} | end {formatTime(agent.endedAt)}
-                    </div>
-                    {agent.excerpt && <p className="excerpt">{agent.excerpt}</p>}
-                    {agent.outputFile && (
-                      <div className="tiny mono" style={{ marginTop: 6 }}>
-                        {agent.outputFile}
-                      </div>
-                    )}
+                    <p className="thought-msg">{item.summary}</p>
+                    {item.artifactPath && <div className="thought-artifact">📎 {item.artifactPath}</div>}
                   </article>
-                ))}
-            </div>
-
-            <div className="roundList">
-              <h3>Round Decisions</h3>
-              {state?.rounds.length ? (
-                state.rounds.map((round) => {
-                  const badge = eventBadge(round.status);
-                  return (
-                    <div key={round.round} className="roundRow">
-                      <div className="cardHead">
-                        <strong>Round {round.round}</strong>
-                        <span className={`badge ${badge.cls}`}>{badge.text}</span>
-                      </div>
-                      <div className="tiny mono">
-                        Worker-2: {round.worker2Decision || "-"} | Evaluator: {round.evaluatorStatus || "-"} |
-                        Coordinator: {round.coordinatorStatus || "-"} | Lint:{" "}
-                        {round.lintPassed === false ? "FAIL" : "PASS/SKIP"}
-                      </div>
-                      {round.changedFiles && round.changedFiles.length > 0 && (
-                        <p className="tiny mono">Changed: {round.changedFiles.join(", ")}</p>
-                      )}
-                      {round.notes.length > 0 && (
-                        <ul className="notes">
-                          {round.notes.map((note, index) => (
-                            <li key={`${round.round}-${index}`}>{note}</li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  );
-                })
+                ))
               ) : (
-                <p className="tiny">No rounds completed yet.</p>
+                <p className="empty-text">Waiting for agent communication...</p>
               )}
             </div>
           </section>
 
-          <section className="card">
-            <div className="cardHead">
-              <h2>Activity Feed</h2>
+          {/* Activity Feed */}
+          <section className="glass-card">
+            <div className="glass-card-head">
+              <h2>Event Timeline</h2>
               <span className="badge info">{latestEvents.length} events</span>
             </div>
             <div className="timeline">
@@ -356,100 +358,107 @@ export default function HomePage() {
                 latestEvents.map((event) => (
                   <article
                     key={event.id}
-                    className={`event ${event.level === "error" ? "error" : event.level === "warn" ? "warn" : ""}`}
+                    className={`event-item ${event.level === "error" ? "error" : event.level === "warn" ? "warn" : ""}`}
                   >
-                    <div className="tiny mono">
-                      {new Date(event.ts).toLocaleTimeString()} | r{event.round} | {event.type}
-                      {event.agentId ? ` | ${event.agentId}` : ""}
+                    <div className="event-meta">
+                      {new Date(event.ts).toLocaleTimeString()} · R{event.round} · {event.type}
+                      {event.agentId ? ` · ${event.agentId}` : ""}
                     </div>
-                    <p className="eventMsg">{event.message}</p>
+                    <p className="event-msg">{event.message}</p>
                   </article>
                 ))
               ) : (
-                <p className="tiny">Waiting for run activity...</p>
+                <p className="empty-text">Waiting for run activity...</p>
               )}
             </div>
           </section>
         </div>
 
-        <div className="grid secondary">
-          <section className="card">
-            <div className="cardHead">
-              <h2>Agent Messages</h2>
-              <span className="badge info">{latestMessages.length} records</span>
+        {/* Secondary Grid: Rounds + Diagnostics */}
+        <div className="content-grid equal">
+          {/* Round Decisions */}
+          <section className="glass-card">
+            <div className="glass-card-head">
+              <h2>Round Decisions</h2>
+              <span className="badge info">{state?.rounds.length ?? 0} rounds</span>
             </div>
-            <div className="timeline">
-              {latestMessages.length ? (
-                latestMessages.map((item, index) => (
-                  <article key={`${item.timestampUtc}-${index}`} className="event">
-                    <div className="tiny mono">
-                      {new Date(item.timestampUtc).toLocaleTimeString()} | r{item.round} | {item.type}
+            <div className="round-list">
+              {state?.rounds.length ? (
+                state.rounds.map((round) => {
+                  const badge = statusBadge(round.status);
+                  return (
+                    <div key={round.round} className="round-row">
+                      <div className="round-head">
+                        <strong>Round {round.round}</strong>
+                        <span className={`badge ${badge.cls}`}>{badge.text}</span>
+                      </div>
+                      <div className="round-detail">
+                        Worker-2: {round.worker2Decision || "—"} · Evaluator: {round.evaluatorStatus || "—"} ·
+                        Coordinator: {round.coordinatorStatus || "—"} · Lint: {round.lintPassed === false ? "FAIL" : "PASS"}
+                      </div>
+                      {round.changedFiles && round.changedFiles.length > 0 && (
+                        <div className="round-detail" style={{ marginTop: 4 }}>
+                          Changed: {round.changedFiles.join(", ")}
+                        </div>
+                      )}
+                      {round.notes.length > 0 && (
+                        <ul className="round-notes">
+                          {round.notes.map((note, idx) => (
+                            <li key={`${round.round}-${idx}`}>{note}</li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
-                    <p className="eventMsg">
-                      {item.from} -&gt; {item.to}: {item.summary}
-                    </p>
-                    {item.artifactPath && <div className="tiny mono">{item.artifactPath}</div>}
-                  </article>
-                ))
+                  );
+                })
               ) : (
-                <p className="tiny">No structured messages yet.</p>
+                <p className="empty-text">No rounds completed yet.</p>
               )}
             </div>
           </section>
 
-          <section className="card">
-            <div className="cardHead">
-              <h2>Checkpoints & Gates</h2>
-              <span className="badge info">{state?.checkpoints.length ?? 0} checkpoints</span>
+          {/* Diagnostics */}
+          <section className="glass-card">
+            <div className="glass-card-head">
+              <h2>Diagnostics</h2>
             </div>
-            <div className="roundList">
-              <h3>Checkpoints</h3>
-              {state?.checkpoints.length ? (
-                state.checkpoints.map((cp) => (
-                  <div key={cp.round} className="roundRow">
-                    <div className="tiny mono">
-                      Round {cp.round} | {cp.restorable ? "restorable" : "not restorable"}
-                    </div>
-                    <div className="tiny mono">{cp.dir}</div>
-                  </div>
-                ))
-              ) : (
-                <p className="tiny">No checkpoints yet.</p>
-              )}
 
-              <h3>Lint Results</h3>
+            <h3 className="section-head">Lint Results</h3>
+            <div className="round-list">
               {state?.lintResults.length ? (
                 state.lintResults.map((lint) => (
-                  <div key={lint.round} className="roundRow">
-                    <div className="tiny mono">
-                      Round {lint.round} | {lint.command}
-                    </div>
-                    <div className="tiny mono">
-                      {lint.ran ? `exit ${lint.exitCode}` : "not run"} | {lint.passed ? "pass" : "fail"}
+                  <div key={lint.round} className="round-row">
+                    <div className="round-detail">
+                      R{lint.round} · {lint.command}
+                      <br />
+                      {lint.ran ? `Exit ${lint.exitCode}` : "Not run"} · {lint.passed ? "✓ Pass" : "✗ Fail"}
                     </div>
                   </div>
                 ))
               ) : (
-                <p className="tiny">No lint records yet.</p>
+                <p className="empty-text">No lint records yet.</p>
               )}
+            </div>
 
-              <h3>Ensemble Outcomes</h3>
+            <h3 className="section-head">Ensemble Outcomes</h3>
+            <div className="round-list">
               {state?.ensembles.length ? (
                 state.ensembles.map((result) => (
-                  <div key={result.round} className="roundRow">
-                    <div className="tiny mono">
-                      Round {result.round} | variant: {result.selectedVariant} | status: {result.selectedStatus}
+                  <div key={result.round} className="round-row">
+                    <div className="round-detail">
+                      R{result.round} · Variant: {result.selectedVariant} · Status: {result.selectedStatus}
+                      <br />
+                      Votes: {JSON.stringify(result.votes)}
                     </div>
-                    <div className="tiny mono">{JSON.stringify(result.votes)}</div>
                   </div>
                 ))
               ) : (
-                <p className="tiny">No ensemble records yet.</p>
+                <p className="empty-text">No ensemble records yet.</p>
               )}
             </div>
           </section>
         </div>
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }
