@@ -1,0 +1,69 @@
+{
+  "schema_version": 2,
+  "last_updated": "2026-03-06T00:00:00.000Z",
+  "routing_mode": "dynamic_capability",
+  "capability_registry": "config/model-capabilities.json",
+  "agents": {
+    "slot_1": {
+      "assigned_model": null,
+      "assigned_platform": null,
+      "domain": "core_runtime",
+      "required_capability": "agentic_execution >= 8",
+      "branch": null,
+      "current_wave": 0,
+      "current_work_unit": null,
+      "status": "awaiting_assignment",
+      "best_candidates": ["codex-5.3", "gpt-5.4", "kilo-auto"]
+    },
+    "slot_2": {
+      "assigned_model": null,
+      "assigned_platform": null,
+      "domain": "architecture_routing",
+      "required_capability": "architecture_reasoning >= 8",
+      "branch": null,
+      "current_wave": 0,
+      "current_work_unit": null,
+      "status": "awaiting_assignment",
+      "best_candidates": ["claude-opus-4.6", "gemini-3.1-pro", "kilo-auto"]
+    },
+    "slot_3": {
+      "assigned_model": null,
+      "assigned_platform": null,
+      "domain": "quality_pipeline",
+      "required_capability": "test_generation >= 7 AND code_review >= 7",
+      "branch": null,
+      "current_wave": 0,
+      "current_work_unit": null,
+      "status": "awaiting_assignment",
+      "best_candidates": ["claude-sonnet-4.6", "gpt-5.2", "gemini-3.1-pro"]
+    },
+    "slot_4": {
+      "assigned_model": null,
+      "assigned_platform": null,
+      "domain": "platform_integration",
+      "required_capability": "frontend_ui >= 7 OR agentic_execution >= 7",
+      "branch": null,
+      "current_wave": 0,
+      "current_work_unit": null,
+      "status": "awaiting_assignment",
+      "best_candidates": ["gemini-3.1-pro", "gpt-5.4", "claude-sonnet-4.6"]
+    }
+  },
+  "work_units": {
+    "W1": { "status": "pending", "assigned_to": null, "wave": 1 },
+    "W2": { "status": "pending", "assigned_to": null, "wave": 1 },
+    "W3": { "status": "pending", "assigned_to": null, "wave": 2 },
+    "W4": { "status": "pending", "assigned_to": null, "wave": 1 },
+    "W5": { "status": "pending", "assigned_to": null, "wave": 1 },
+    "W6": { "status": "pending", "assigned_to": null, "wave": 1 },
+    "W7": { "status": "pending", "assigned_to": null, "wave": 2 },
+    "W8": { "status": "pending", "assigned_to": null, "wave": 3 },
+    "W9": { "status": "pending", "assigned_to": null, "wave": 3 },
+    "W10": { "status": "pending", "assigned_to": null, "wave": 2 },
+    "W11": { "status": "pending", "assigned_to": null, "wave": 3 },
+    "W12": { "status": "pending", "assigned_to": null, "wave": 4 },
+    "W13": { "status": "pending", "assigned_to": null, "wave": 4 },
+    "W14": { "status": "pending", "assigned_to": null, "wave": 2 },
+    "W15": { "status": "pending", "assigned_to": null, "wave": 5 }
+  }
+}
