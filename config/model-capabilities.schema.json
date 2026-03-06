@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "model-capabilities.schema.json",
+  "title": "Model Capability Registry",
+  "description": "Schema for config/model-capabilities.json — the dynamic model capability database used by the orchestrator for task routing.",
+  "type": "object",
+  "required": ["version", "updatedAt", "models", "taskDimensions", "tiers"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "description": { "type": "string" },
+    "taskDimensions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "The scoring dimensions used across all models. Must be consistent with taskScores keys."
+    },
+    "tiers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["maxCostInputPerMToken", "description"],
+        "properties": {
+          "maxCostInputPerMToken": { "type": "number", "minimum": 0 },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "candidateId", "provider", "model", "displayName", "family",
+          "tier", "contextWindow", "maxOutputTokens", "supportsTools",
+          "supportsVision", "supportsStreaming", "pricing", "taskScores"
+        ],
+        "properties": {
+          "candidateId": { "type": "string", "description": "Stable ID for routing. Survives model version changes." },
+          "provider": { "type": "string", "description": "Provider identifier (openai, anthropic, gemini, codex, ollama, deepseek, qwen, kilo, etc.)" },
+          "model": { "type": "string", "description": "The model string passed to the API." },
+          "displayName": { "type": "string" },
+          "family": { "type": "string", "description": "Model family for grouping (openai, anthropic, google, meta, alibaba, etc.)" },
+          "tier": { "type": "string", "enum": ["nano", "mid", "frontier", "reasoning"] },
+          "releasedAt": { "type": "string" },
+          "contextWindow": { "type": "integer", "minimum": 1 },
+          "maxOutputTokens": { "type": "integer", "minimum": 1 },
+          "supportsTools": { "type": "boolean" },
+          "supportsVision": { "type": "boolean" },
+          "supportsAudio": { "type": "boolean" },
+          "supportsStreaming": { "type": "boolean" },
+          "supportsExtendedThinking": { "type": "boolean" },
+          "pricing": {
+            "type": "object",
+            "required": ["inputPerMTokens", "outputPerMTokens"],
+            "properties": {
+              "inputPerMTokens": { "type": "number", "minimum": 0 },
+              "outputPerMTokens": { "type": "number", "minimum": 0 },
+              "hasFreeQuota": { "type": "boolean" }
+            }
+          },
+          "benchmarks": {
+            "type": "object",
+            "additionalProperties": { "type": ["number", "null"] },
+            "description": "Benchmark scores. null = not measured. Extensible — add new benchmarks freely."
+          },
+          "taskScores": {
+            "type": "object",
+            "additionalProperties": { "type": "number", "minimum": 0, "maximum": 10 },
+            "description": "Scoring per task dimension (0-10). Higher = better."
+          },
+          "strengths": { "type": "array", "items": { "type": "string" } },
+          "weaknesses": { "type": "array", "items": { "type": "string" } },
+          "slo": {
+            "type": "object",
+            "properties": {
+              "p50LatencyMs": { "type": ["number", "null"] },
+              "p95LatencyMs": { "type": ["number", "null"] },
+              "tokensPerSecond": { "type": ["number", "null"] }
+            }
+          },
+          "notes": { "type": "string" }
+        }
+      }
+    }
+  }
+}
