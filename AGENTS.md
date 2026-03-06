@@ -1,43 +1,18 @@
-# Codex-Orch Agent Guide
+# AGENTS.md
 
-This guide is for IDE-integrated coding agents (OpenAI Codex extension, Copilot chat agents, and CLI agents).
+This file provides guidance to agents when working with code in this repository.
 
-## Fast Paths
-
-- Bootstrap workspace:
-  - `npm install`
-  - `npm run bootstrap`
-- Build everything:
-  - `npm run build:all`
-- Run GUI (Next.js dashboard):
-  - `npm run dev:gui`
-- Run CLI swarm:
-  - `npm run swarm:run -- --mode local --max-rounds 3`
-- Run Foundry Agent Framework server:
-  - `npm run dev:agent`
-- Run GUI + agent server together:
-  - `npm run dev:all`
-- Discover/optimize/evaluate model routing:
-  - `npm run models:discover`
-  - `npm run models:optimize`
-  - `npm run models:evaluate`
-
-## VS Code Integration
-
-- Use `.vscode/tasks.json` tasks with prefix `Orch:` for all common flows.
-- Use `.vscode/launch.json` config `Orch: Debug Agent HTTP (Inspector)` for agentdev/debugpy attach.
-
-## Context Files
-
-- Runtime orchestration: `lib/swarm/engine.ts`
-- Batch pipeline: `scripts/batch/*.mjs`
-- Foundry workflow server: `foundry_agents/workflow_server.py`
-- Model optimizer: `scripts/swarm-models.ts`
-- Role routing config: `config/model-routing.json`
-- Role prompts: `prompts/*.md`
-
-## Constraints
-
-- Keep changes additive and avoid breaking existing batch/swarm flows.
-- Do not commit secrets; use `.env.local` and `.env` placeholders.
-- Prefer existing scripts/tasks over introducing new one-off commands.
+- This workspace has two active codebases: root orchestration runtime and `roocode-ref/`. Scope tooling assumptions to the subtree you edit.
+- `scripts/dev/bootstrap.mjs` does more than dependency install: it copies `.env.example` to `.env.local`, creates `.venv`, and installs Python requirements.
+- Python entry scripts (`scripts/dev/run-agent.mjs`, `scripts/dev/compile-python.mjs`) prefer `.venv` Python and only then fall back to system launchers.
+- Runtime mode is environment-forced in `lib/swarm/engine.ts`: `VERCEL` or `SWARM_FORCE_DEMO=1` forces `demo`; otherwise `local`.
+- Swarm rounds are hard-clamped to 1..8 via `MAX_ALLOWED_ROUNDS` in `lib/swarm/engine.ts`, regardless of CLI input.
+- Rewind is not full-workspace restore: only paths in `CHECKPOINT_TARGETS` are checkpointed/restored.
+- Lint gating is script-discovery based in `lib/swarm/engine.ts`: if root `package.json` has no `scripts.lint`, lint loop is skipped as pass.
+- Rewind safety requires pause: `rewindSwarmToRound` throws when a run is active and not paused.
+- Model routing is file-driven via `config/model-routing.json` unless overridden by `SWARM_MODEL_ROUTING_FILE`.
+- Batch context injection is shared across TS and Python runtimes via `SWARM_BATCH_MERGED_FILE` (default `batch/out/merged_output.jsonl`).
+- Prefer VS Code tasks with `Orch:` labels; Python inspector debugging attaches via launch config `Orch: Debug Agent HTTP (Inspector)`.
+- Relevant imported assistant rules for `roocode-ref/` edits:
+  - `SettingsView` inputs must bind to local `cachedState`, not directly to `useExtensionState()`.
+  - JSON persistence should use `safeWriteJson` from `roocode-ref/src/utils/safeWriteJson.ts`.
