@@ -1,0 +1,245 @@
+{
+    "mcpServers": {
+        "github": {
+            "command": "docker",
+            "args": [
+                "run",
+                "-i",
+                "--rm",
+                "-e",
+                "GITHUB_PERSONAL_ACCESS_TOKEN",
+                "-e",
+                "GITHUB_TOOLSETS",
+                "-e",
+                "GITHUB_READ_ONLY",
+                "ghcr.io/github/github-mcp-server"
+            ],
+            "env": {
+                "GITHUB_PERSONAL_ACCESS_TOKEN": "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",
+                "GITHUB_TOOLSETS": "https://github.com/ironkid90/ai-agents-swiss-knife",
+                "GITHUB_READ_ONLY": ""
+            },
+            "disabled": true,
+            "alwaysAllow": []
+        },
+        "filesystem": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                "/Users/admin"
+            ],
+            "alwaysAllow": [
+                "search_files"
+            ]
+        },
+        "sequentialthinking": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@modelcontextprotocol/server-sequential-thinking"
+            ],
+            "alwaysAllow": [
+                "sequentialthinking"
+            ]
+        },
+        "git": {
+            "command": "uvx",
+            "args": [
+                "mcp-server-git",
+                "--repository",
+                "/share/share/codex-orch-unified"
+            ],
+            "disabled": false,
+            "alwaysAllow": []
+        },
+        "puppeteer": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@modelcontextprotocol/server-puppeteer"
+            ],
+            "alwaysAllow": [
+                "puppeteer_navigate",
+                "puppeteer_screenshot",
+                "puppeteer_click",
+                "puppeteer_fill",
+                "puppeteer_select",
+                "puppeteer_evaluate",
+                "puppeteer_hover"
+            ]
+        },
+        "genkit": {
+            "command": "npm",
+            "args": [
+                "install",
+                "@genkit-ai/mcp"
+            ],
+            "disabled": true,
+            "alwaysAllow": []
+        },
+        "playwright": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@playwright/mcp@0.0.38"
+            ],
+            "alwaysAllow": [
+                "browser_close",
+                "browser_resize",
+                "browser_console_messages",
+                "browser_handle_dialog",
+                "browser_evaluate",
+                "browser_file_upload",
+                "browser_fill_form",
+                "browser_install",
+                "browser_type",
+                "browser_navigate",
+                "browser_navigate_back",
+                "browser_take_screenshot",
+                "browser_network_requests",
+                "browser_snapshot",
+                "browser_click",
+                "browser_drag",
+                "browser_hover",
+                "browser_select_option",
+                "browser_tabs"
+            ]
+        },
+        "microsoft-learn": {
+            "type": "streamable-http",
+            "url": "https://learn.microsoft.com/api/mcp"
+        },
+        "google-maps-platform-code-assist": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@googlemaps/code-assist-mcp@0.2.0"
+            ],
+            "disabled": true,
+            "alwaysAllow": []
+        },
+        "firebase": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "firebase-tools@14.15.2",
+                "experimental:mcp"
+            ]
+        },
+        "ida-pro": {
+            "command": "uvx",
+            "args": [
+                "--from",
+                "git+https://github.com/mrexodia/ida-pro-mcp.git@f0af9fba733fb60fc13365b297b10c82db3771d7",
+                "ida-pro-mcp"
+            ],
+            "alwaysAllow": [
+                "check_connection",
+                "get_metadata",
+                "get_function_by_name",
+                "get_function_by_address",
+                "get_current_function",
+                "get_current_address",
+                "convert_number",
+                "list_functions",
+                "list_globals_filter",
+                "list_imports",
+                "list_globals",
+                "list_strings_filter",
+                "disassemble_function",
+                "decompile_function",
+                "list_local_types",
+                "get_xrefs_to_field",
+                "get_xrefs_to",
+                "set_comment",
+                "get_entry_points",
+                "get_callers",
+                "rename_global_variable",
+                "rename_local_variable",
+                "get_global_variable_value_at_address",
+                "get_global_variable_value_by_name",
+                "set_local_variable_type",
+                "declare_c_type",
+                "get_struct_at_address",
+                "analyze_struct_detailed",
+                "get_defined_structures",
+                "search_structures",
+                "data_read_qword"
+            ]
+        },
+        "augment-context-engine": {
+            "command": "auggie",
+            "args": [
+                "--mcp",
+                "--mcp-auto-workspace"
+            ],
+            "disabled": true,
+            "alwaysAllow": []
+        },
+        "n8n-mcp": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "n8n-mcp@2.12.2"
+            ],
+            "env": {
+                "MCP_MODE": "stdio",
+                "LOG_LEVEL": "error",
+                "DISABLE_CONSOLE_OUTPUT": "true"
+            }
+        },
+        "context7": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@upstash/context7-mcp"
+            ],
+            "env": {
+                "DEFAULT_MINIMUM_TOKENS": ""
+            }
+        },
+        "memory": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@modelcontextprotocol/server-memory"
+            ]
+        },
+        "sqlite": {
+            "command": "uvx",
+            "args": [
+                "mcp-server-sqlite",
+                "--db-path",
+                "/home/sqlite"
+            ]
+        },
+        "codegen": {
+            "command": "uvx",
+            "args": [
+                "--from",
+                "git+https://github.com/codegen-sh/codegen-sdk.git#egg=codegen-mcp-server&subdirectory=codegen-examples/examples/codegen-mcp-server",
+                "codegen-mcp-server"
+            ],
+            "disabled": true,
+            "alwaysAllow": []
+        },
+        "fireproof": {
+            "command": "node",
+            "args": [
+                "/build/index.js"
+            ],
+            "disabled": true,
+            "alwaysAllow": []
+        },
+        "git-mcp": {
+            "type": "streamable-http",
+            "url": "https://gitmcp.io/ironkid90/codex-orch-unified",
+            "alwaysAllow": [
+                "search_codex_orch_code",
+                "search_codex_orch_docs",
+                "fetch_codex_orch_docs"
+            ]
+        }
+    }
+}
