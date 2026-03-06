@@ -1,0 +1,105 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WorkflowGraph",
+  "type": "object",
+  "required": [
+    "id",
+    "nodes",
+    "edges",
+    "entryNodeId",
+    "exitNodeIds"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "entryNodeId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "exitNodeIds": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "agent",
+              "gate",
+              "merge",
+              "branch",
+              "checkpoint",
+              "human-review"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "agentRole": {
+            "type": "string"
+          },
+          "predicate": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "from",
+          "to",
+          "type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "sequential",
+              "conditional",
+              "parallel",
+              "fallback"
+            ]
+          },
+          "condition": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}
