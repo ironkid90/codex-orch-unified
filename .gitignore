@@ -59,3 +59,6 @@ my-app/
 Thumbs.db
 .vscode/*.log
 roocode-ref
+
+# Local tooling session identifiers (machine-specific, changes frequently)
+.kilocode/session-id

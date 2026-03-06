@@ -84,7 +84,7 @@ export const TIER_COST_CEILINGS: Record<ModelTier, number> = {
   mid: 3.00,
   frontier: 15.00,
   reasoning: 999.00,
-export const COMPLEXITY_TIER_MAP: Record<0 | 1 | 2, ModelTier> = {
+};
 
 /** Maps task complexity to minimum required tier */
 export const COMPLEXITY_TIER_MAP: Record<number, ModelTier> = {
