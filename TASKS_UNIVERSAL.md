@@ -177,7 +177,7 @@ OTel span timeline, nested hierarchy, duration bars, click-to-expand.
 
 ### W15: Self-Hosting Convergence
 **Domain**: Architecture & Routing | **Depends On**: ALL
-**Target Files**: `coordination/`, `DECENTRALIZED_WORK.md`
+**Target Files**: `coordination/` (reads from `DECENTRALIZED_WORK.md` as a read-only reference)
 
 The codex-orch platform becomes its own orchestrator. IDE agents register as swarm roles. File ownership = CodingContext. Handoffs = Message schema. Graph DSL = workflow between IDE agents.
 
