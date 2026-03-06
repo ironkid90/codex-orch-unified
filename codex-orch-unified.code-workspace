@@ -13,7 +13,12 @@
       "**/node_modules": true,
       "**/.venv": true,
       "**/runs": true,
-      "**/output": true
+      "**/output": true,
+      "code-index-mcp": true,
+      "swiss-knife-temp": true,
+      "multi-codex": true,
+      "my-app": true,
+      "roocode-ref": true
     }
   }
 }
