@@ -301,14 +301,20 @@ export default function HomePage() {
             {agents.map((agent, i) => (
               <div key={agent.id} style={{ display: "flex", alignItems: "center" }}>
                 {i > 0 && <div className="pipeline-connector" />}
-                <div className="pipeline-agent">
-                  <div className="agent-name">
+                <div className={`pipeline-agent ${agent.phase === 'running' ? 'active' : ''}`}>
+                  <div className="agent-name" title={agent.id}>
                     <span className={`status-dot ${agent.phase}`} />
                     {agent.label}
                   </div>
-                  <div className="agent-detail" style={{ marginTop: 4 }}>
-                    {agent.phase} · R{agent.round}
+                  <div className="agent-detail" style={{ marginTop: 6, display: "flex", justifyContent: "center", gap: "6px", alignItems: "center" }}>
+                    <span className={`phase-pill ${agent.phase}`}>{agent.phase}</span>
+                    {agent.pdaStage && <span className="pda-badge">{agent.pdaStage}</span>}
                   </div>
+                  {agent.taskTarget && (
+                    <div className="agent-action-target" title={agent.taskTarget}>
+                      <span style={{ opacity: 0.5 }}>↳</span> {agent.taskTarget}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
