@@ -53,6 +53,9 @@ function runShellCommand(
     const timer = setTimeout(() => {
       if (finished) {
         return;
+
+
+        
       }
       timedOut = true;
       child.kill();

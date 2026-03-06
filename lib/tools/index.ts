@@ -1,7 +1,10 @@
 import { EditFileTool } from "./edit-file";
+import { ExecuteShellTool } from "./execute-shell";
+import { ReadFileTool } from "./read-file";
+import { SearchFilesTool } from "./search-files";
 import type { Tool, ToolContext, ToolRegistry, ToolResult } from "./types";
 
-const DEFAULT_TOOLS: Tool[] = [EditFileTool];
+const DEFAULT_TOOLS: Tool[] = [ReadFileTool, EditFileTool, ExecuteShellTool, SearchFilesTool];
 
 export function getDefaultTools(): Tool[] {
   return [...DEFAULT_TOOLS];
@@ -38,3 +41,6 @@ export async function executeToolCall(
 
 export * from "./types";
 export * from "./edit-file";
+export * from "./execute-shell";
+export * from "./read-file";
+export * from "./search-files";
