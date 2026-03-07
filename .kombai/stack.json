@@ -1,0 +1,21 @@
+// Kombai Tech Stack Configuration
+// Each value must be a string or an array of strings.
+// Example: "Framework": "Vite" or "Project Type": ["React", "Vue"]
+{
+  "Project Type": "React",
+  "Framework": "NextJS 14",
+  "CSS Implementation": "Vanilla CSS",
+  "Tailwind Version": "None",
+  "TS/JS": "TS",
+  "Router": "App Router",
+  "API Client": "Fetch API",
+  "Server Runtime": "Node.js v20",
+  "Package Manager": "npm",
+  "component_indexes": [
+    {
+      "type": "local",
+      "path": "code-index-mcp",
+      "name": "code-index-mcp"
+    }
+  ]
+}
