@@ -59,20 +59,20 @@ export type CodingTaskType =
 
 /** Maps task types to primary + secondary scoring dimensions */
 export const TASK_DIMENSION_MAP: Record<CodingTaskType, { primary: TaskDimension; secondary: TaskDimension[] }> = {
-  code_generation:         { primary: 'code_generation',         secondary: ['architecture_reasoning', 'multilingual_code'] },
-  bug_fixing:              { primary: 'bug_fixing',              secondary: ['code_review', 'agentic_execution'] },
-  agentic_execution:       { primary: 'agentic_execution',       secondary: ['code_generation', 'security_analysis'] },
-  architecture_design:     { primary: 'architecture_reasoning',  secondary: ['code_review', 'large_codebase_nav'] },
-  algorithmic_problem:     { primary: 'algorithmic_math',        secondary: ['code_generation'] },
-  large_codebase_refactor: { primary: 'large_codebase_nav',      secondary: ['code_generation', 'architecture_reasoning'] },
-  code_review:             { primary: 'code_review',             secondary: ['bug_fixing', 'security_analysis'] },
-  test_generation:         { primary: 'test_generation',         secondary: ['code_generation', 'bug_fixing'] },
-  documentation:           { primary: 'documentation',           secondary: ['architecture_reasoning'] },
-  frontend_ui:             { primary: 'frontend_ui',             secondary: ['code_generation'] },
-  computer_use:            { primary: 'computer_use',            secondary: ['agentic_execution'] },
-  multilingual_code:       { primary: 'multilingual_code',       secondary: ['code_generation'] },
-  security_audit:          { primary: 'security_analysis',       secondary: ['code_review', 'bug_fixing'] },
-  simple_transform:        { primary: 'fast_simple_tasks',       secondary: [] },
+  code_generation: { primary: 'code_generation', secondary: ['architecture_reasoning', 'multilingual_code'] },
+  bug_fixing: { primary: 'bug_fixing', secondary: ['code_review', 'agentic_execution'] },
+  agentic_execution: { primary: 'agentic_execution', secondary: ['code_generation', 'security_analysis'] },
+  architecture_design: { primary: 'architecture_reasoning', secondary: ['code_review', 'large_codebase_nav'] },
+  algorithmic_problem: { primary: 'algorithmic_math', secondary: ['code_generation'] },
+  large_codebase_refactor: { primary: 'large_codebase_nav', secondary: ['code_generation', 'architecture_reasoning'] },
+  code_review: { primary: 'code_review', secondary: ['bug_fixing', 'security_analysis'] },
+  test_generation: { primary: 'test_generation', secondary: ['code_generation', 'bug_fixing'] },
+  documentation: { primary: 'documentation', secondary: ['architecture_reasoning'] },
+  frontend_ui: { primary: 'frontend_ui', secondary: ['code_generation'] },
+  computer_use: { primary: 'computer_use', secondary: ['agentic_execution'] },
+  multilingual_code: { primary: 'multilingual_code', secondary: ['code_generation'] },
+  security_audit: { primary: 'security_analysis', secondary: ['code_review', 'bug_fixing'] },
+  simple_transform: { primary: 'fast_simple_tasks', secondary: [] },
 };
 
 // ─── Model Tiers ────────────────────────────────────────────────────────────
@@ -216,10 +216,10 @@ export interface RoutingFeedback {
 // Maps swarm agent roles to their primary task types for auto-routing.
 
 export const ROLE_TASK_MAPPING: Record<string, CodingTaskType[]> = {
-  research:    ['large_codebase_refactor', 'documentation', 'architecture_design'],
-  worker1:     ['code_generation', 'agentic_execution', 'bug_fixing'],
-  worker2:     ['code_review', 'security_audit', 'bug_fixing'],
-  evaluator:   ['code_review', 'test_generation', 'architecture_design'],
+  research: ['large_codebase_refactor', 'documentation', 'architecture_design'],
+  worker1: ['code_generation', 'agentic_execution', 'bug_fixing'],
+  worker2: ['code_review', 'security_audit', 'bug_fixing'],
+  evaluator: ['code_review', 'test_generation', 'architecture_design'],
   coordinator: ['architecture_design', 'code_review'],
 };
 

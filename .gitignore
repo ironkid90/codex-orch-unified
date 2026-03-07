@@ -44,6 +44,16 @@ __pycache__/
 *.zip
 *.7z
 
+# Logs
+*.log
+firebase-debug.log
+
+# Stale subdirectories (not part of main project)
+code-index-mcp/
+swiss-knife-temp/
+multi-codex/
+my-app/
+
 # OS and editor noise
 .DS_Store
 Thumbs.db
@@ -53,3 +63,6 @@ roocode-ref
 # Firebase debug logs
 firebase-debug.log
 *-debug.log
+
+# Local tooling session identifiers (machine-specific, changes frequently)
+.kilocode/session-id
