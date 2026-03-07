@@ -8,6 +8,8 @@ import {
   type AgentMessage,
   type CheckpointInfo,
   type EnsembleResult,
+  createIoCoordinatorDefaults,
+  type IoCoordinatorSnapshot,
   type LintResult,
   type RoundSummary,
   type SwarmFeatures,
@@ -39,6 +41,7 @@ function createInitialState(): SwarmRunState {
     ensembles: [],
     events: [],
     errors: [],
+    ioCoordinator: createIoCoordinatorDefaults(),
   };
 }
 
@@ -91,6 +94,7 @@ class SwarmStore {
       ensembles: [],
       events: [],
       errors: [],
+      ioCoordinator: createIoCoordinatorDefaults(),
     };
 
     this.appendEvent({
@@ -202,6 +206,13 @@ class SwarmStore {
     }
   }
 
+  setIoCoordinator(snapshot: IoCoordinatorSnapshot): void {
+    this.state.ioCoordinator = snapshot;
+    if (this.state.running && this.state.runId) {
+      this.emitTransientStateUpdate("io.updated");
+    }
+  }
+
   appendEvent(input: EventInput): SwarmEvent {
     if (!this.state.runId) {
       throw new Error("Cannot append event without an active run.");
@@ -220,6 +231,22 @@ class SwarmStore {
 
     this.emitter.emit("event", event);
     return event;
+  }
+
+  private emitTransientStateUpdate(type: string): void {
+    if (!this.state.runId) {
+      return;
+    }
+
+    const event: SwarmEvent = {
+      id: ++this.eventCounter,
+      runId: this.state.runId,
+      ts: new Date().toISOString(),
+      type,
+      round: this.state.currentRound,
+      message: "",
+    };
+    this.emitter.emit("event", event);
   }
 }
 

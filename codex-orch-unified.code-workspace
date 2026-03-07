@@ -5,6 +5,9 @@
     },
     {
       "path": "../MetaGPT"
+    },
+    {
+      "path": "../symphony"
     }
   ],
   "settings": {
@@ -19,6 +22,7 @@
       "multi-codex": true,
       "my-app": true,
       "roocode-ref": true
-    }
+    },
+    "chatgpt.followUpQueueMode": "steer"
   }
 }

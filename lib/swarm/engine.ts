@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import OpenAI from "openai";
+import { IOCoordinator } from "./io-coordinator";
 import { createProvider } from "../providers/factory";
 import type {
   Message as ProviderMessage,
@@ -52,6 +53,16 @@ import type {
   SwarmFeatures,
 } from "./types";
 import { verifyOutputSafety } from "./verifier";
+// ---- Symphony integration: token accounting + workspace safety ----
+import {
+  TokenTracker,
+  addTokenUsage,
+  createTokenUsage,
+  normalizeTokenUsage,
+  subtractTokenUsage,
+  type TokenUsage,
+} from "./token-tracker";
+import { WorkspaceManager } from "./workspace-manager";
 
 const PROJECT_ROOT = process.cwd();
 const PROMPTS_DIR = path.join(PROJECT_ROOT, "prompts");
@@ -62,6 +73,18 @@ const MAX_ALLOWED_ROUNDS = 8;
 const DEFAULT_TOOL_MAX_STEPS = 6;
 const DEFAULT_PROVIDER_MAX_OUTPUT_TOKENS = 2200;
 const defaultToolRegistry = createDefaultToolRegistry();
+
+// ---- Symphony integration: stall detection + token tracking singletons ----
+const STALL_TIMEOUT_MS =
+  parseInt(process.env.SWARM_STALL_TIMEOUT_MS ?? "300000", 10) || 300_000;
+/** Tracks token usage per agent session across the lifetime of a run. */
+const tokenTracker = new TokenTracker();
+/** Module-level workspace manager (validates paths inside PROJECT_ROOT). */
+const _workspaceManager = new WorkspaceManager({ root: PROJECT_ROOT });
+
+IOCoordinator.setMetricsListener((snapshot) => {
+  swarmStore.setIoCoordinator(snapshot);
+});
 
 const CHECKPOINT_TARGETS = [
   "app",
@@ -200,6 +223,14 @@ function normalizeRel(value: string): string {
 
 function hashText(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function createTaskTokenSessionId(task: AgentTask): string {
+  return `${task.agentId}:round:${task.round}`;
+}
+
+function formatTokenUsage(usage: TokenUsage): string {
+  return `input=${usage.inputTokens} output=${usage.outputTokens} total=${usage.totalTokens}`;
 }
 
 function clampRounds(value?: number): number {
@@ -839,6 +870,71 @@ function extractGeminiText(payload: unknown): string {
     .trim();
 }
 
+function extractOpenAIUsage(payload: unknown): TokenUsage {
+  if (!payload || typeof payload !== "object") {
+    return createTokenUsage();
+  }
+
+  const usageValue = (payload as {
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      total_tokens?: number;
+      prompt_tokens?: number;
+      completion_tokens?: number;
+    };
+  }).usage;
+
+  return normalizeTokenUsage({
+    inputTokens: usageValue?.input_tokens ?? usageValue?.prompt_tokens ?? 0,
+    outputTokens: usageValue?.output_tokens ?? usageValue?.completion_tokens ?? 0,
+    totalTokens: usageValue?.total_tokens,
+  });
+}
+
+function extractGeminiUsage(payload: unknown): TokenUsage {
+  if (!payload || typeof payload !== "object") {
+    return createTokenUsage();
+  }
+
+  const metadata = (payload as {
+    usageMetadata?: {
+      promptTokenCount?: number;
+      candidatesTokenCount?: number;
+      totalTokenCount?: number;
+    };
+  }).usageMetadata;
+
+  return normalizeTokenUsage({
+    inputTokens: metadata?.promptTokenCount ?? 0,
+    outputTokens: metadata?.candidatesTokenCount ?? 0,
+    totalTokens: metadata?.totalTokenCount,
+  });
+}
+
+async function runWithStallTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  onStall: () => void,
+): Promise<T> {
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          onStall();
+          reject(new Error(`Task stalled after ${timeoutMs}ms.`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 async function runGeminiResearch(
   workspace: string,
   round: number,
@@ -901,8 +997,9 @@ async function runGeminiResearch(
   if (!response.ok) {
     throw new Error(`Gemini request failed with ${response.status}`);
   }
-  const json = (await response.json()) as unknown;
-  return extractGeminiText(json) || null;
+  const payload = (await response.json()) as unknown;
+  tokenTracker.recordDelta(`research:round:${round}`, extractGeminiUsage(payload));
+  return extractGeminiText(payload) || null;
 }
 
 async function runOpenAIResearch(
@@ -938,6 +1035,7 @@ async function runOpenAIResearch(
       temperature: 0.2,
       max_output_tokens: maxOutputTokens,
     });
+    tokenTracker.recordDelta(`research:round:${round}`, extractOpenAIUsage(response as unknown));
     return extractModelOutputText(response) || null;
   }
 
@@ -962,11 +1060,12 @@ async function runOpenAIResearch(
   if (!response.ok) {
     throw new Error(`OpenAI research request failed with ${response.status}`);
   }
-  const json = (await response.json()) as unknown;
-  return extractModelOutputText(json) || null;
+  const payload = (await response.json()) as unknown;
+  tokenTracker.recordDelta(`research:round:${round}`, extractOpenAIUsage(payload));
+  return extractModelOutputText(payload) || null;
 }
 async function waitIfPaused(round: number, gate: string): Promise<void> {
-  for (;;) {
+  for (; ;) {
     const state = swarmStore.getState();
     if (!state.running) {
       throw new Error("Run no longer active.");
@@ -1002,7 +1101,7 @@ async function maybeRequireApprovalBeforeAct(round: number, agentId: AgentId): P
   await waitIfPaused(round, `${agentId}-approval`);
 }
 
-async function runCodexTask(task: AgentTask): Promise<void> {
+async function runCodexTask(task: AgentTask): Promise<TokenUsage> {
   const codexBin = process.env.SWARM_CODEX_BIN || "codex";
   const model = task.execution?.model || process.env.SWARM_CODEX_MODEL;
   const args = [
@@ -1027,9 +1126,10 @@ async function runCodexTask(task: AgentTask): Promise<void> {
   if (result.exitCode !== 0) {
     throw new Error(`Codex exited ${result.exitCode}: ${result.stderr.slice(-400)}`);
   }
+  return createTokenUsage();
 }
 
-async function runOpenAITask(task: AgentTask): Promise<void> {
+async function runOpenAITask(task: AgentTask): Promise<TokenUsage> {
   const model = task.execution?.model || process.env.OPENAI_SWARM_MODEL || "gpt-5.2";
   const maxOutputTokens = parseClampedInt(process.env.OPENAI_SWARM_MAX_OUTPUT_TOKENS, 2200, 256, 8192);
   const oauthToken = process.env.OPENAI_OAUTH_ACCESS_TOKEN || "";
@@ -1040,15 +1140,19 @@ async function runOpenAITask(task: AgentTask): Promise<void> {
       apiKey,
       baseURL: process.env.OPENAI_BASE_URL || undefined,
     });
-    const response = await client.responses.create({
-      model,
-      input: task.prompt,
-      max_output_tokens: maxOutputTokens,
-      temperature: 0.2,
-    });
+    const response = await IOCoordinator.executeWithResilience(
+      'OpenAITask',
+      () => client.responses.create({
+        model,
+        input: task.prompt,
+        max_output_tokens: maxOutputTokens,
+        temperature: 0.2,
+      }),
+      { maxRetries: 3 }
+    );
     const text = extractModelOutputText(response) || "(empty response)";
     await writeFile(task.outFile, text, "utf8");
-    return;
+    return extractOpenAIUsage(response as unknown);
   }
 
   if (!oauthToken) {
@@ -1056,25 +1160,30 @@ async function runOpenAITask(task: AgentTask): Promise<void> {
   }
 
   const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
-  const response = await fetch(`${baseUrl}/responses`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${oauthToken}`,
-    },
-    body: JSON.stringify({
-      model,
-      input: task.prompt,
-      max_output_tokens: maxOutputTokens,
-      temperature: 0.2,
+  const response = await IOCoordinator.executeWithResilience(
+    'OpenAITaskFetch',
+    () => fetch(`${baseUrl}/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${oauthToken}`,
+      },
+      body: JSON.stringify({
+        model,
+        input: task.prompt,
+        max_output_tokens: maxOutputTokens,
+        temperature: 0.2,
+      }),
     }),
-  });
+    { maxRetries: 3 }
+  );
   if (!response.ok) {
     throw new Error(`OpenAI OAuth request failed with ${response.status}`);
   }
   const json = (await response.json()) as unknown;
   const text = extractModelOutputText(json) || "(empty response)";
   await writeFile(task.outFile, text, "utf8");
+  return extractOpenAIUsage(json);
 }
 
 function getGeminiTaskConfig(modelOverride?: string): GeminiResearchConfig {
@@ -1089,7 +1198,7 @@ function getGeminiTaskConfig(modelOverride?: string): GeminiResearchConfig {
   };
 }
 
-async function runGeminiTask(task: AgentTask): Promise<void> {
+async function runGeminiTask(task: AgentTask): Promise<TokenUsage> {
   const cfg = getGeminiTaskConfig(task.execution?.model);
   const body = {
     contents: [
@@ -1123,17 +1232,22 @@ async function runGeminiTask(task: AgentTask): Promise<void> {
     headers.authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
+  const response = await IOCoordinator.executeWithResilience(
+    'GeminiTaskFetch',
+    () => fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    }),
+    { maxRetries: 3 }
+  );
   if (!response.ok) {
     throw new Error(`Gemini request failed with ${response.status}`);
   }
   const json = (await response.json()) as unknown;
   const text = extractGeminiText(json) || "(empty response)";
   await writeFile(task.outFile, text, "utf8");
+  return extractGeminiUsage(json);
 }
 
 function resolveGeminiCompatibleBaseUrl(): string | undefined {
@@ -1243,7 +1357,10 @@ function createToolContext(task: AgentTask): AgentToolContext {
   };
 }
 
-async function runUnifiedProviderTask(task: AgentTask, providerId: Exclude<ProviderId, "codex">): Promise<void> {
+async function runUnifiedProviderTask(
+  task: AgentTask,
+  providerId: Exclude<ProviderId, "codex">,
+): Promise<TokenUsage> {
   const provider = createProvider(buildUnifiedProviderConfig(task, providerId));
   const enableTools = process.env.SWARM_ENABLE_TOOLS !== "0";
   const toolDefinitions = enableTools ? getRegisteredToolDefinitions() : [];
@@ -1258,17 +1375,35 @@ async function runUnifiedProviderTask(task: AgentTask, providerId: Exclude<Provi
   const messages: ProviderMessage[] = [{ role: "user", content: task.prompt }];
   const toolContext = createToolContext(task);
   let finalText = "";
+  let totalUsage = createTokenUsage();
 
   for (let step = 0; step <= maxToolSteps; step++) {
-    const completion = await provider.complete({
-      messages,
-      tools: toolDefinitions.length ? toolDefinitions : undefined,
-      temperature: 0.2,
-      maxTokens,
-    });
+    const optimizedMessages = IOCoordinator.optimizeContext(messages, maxTokens);
+
+    const completion = await IOCoordinator.executeWithResilience(
+      `UnifiedProvider(${providerId})`,
+      () => provider.complete({
+        messages: optimizedMessages as typeof messages,
+        tools: toolDefinitions.length ? toolDefinitions : undefined,
+        temperature: 0.2,
+        maxTokens,
+      }),
+      { maxRetries: 3 }
+    );
 
     if (completion.content.trim()) {
       finalText = completion.content;
+    }
+
+    if (completion.usage) {
+      totalUsage = addTokenUsage(
+        totalUsage,
+        normalizeTokenUsage({
+          inputTokens: completion.usage.inputTokens,
+          outputTokens: completion.usage.outputTokens,
+          totalTokens: completion.usage.inputTokens + completion.usage.outputTokens,
+        }),
+      );
     }
 
     const assistantMessage: ProviderMessage = {
@@ -1321,31 +1456,28 @@ async function runUnifiedProviderTask(task: AgentTask, providerId: Exclude<Provi
   }
 
   await writeFile(task.outFile, finalText.trim() ? finalText : "(empty response)", "utf8");
+  return totalUsage;
 }
 
-async function runProviderTask(task: AgentTask): Promise<void> {
+async function runProviderTask(task: AgentTask): Promise<TokenUsage> {
   const provider = task.execution?.provider || "codex";
   if (provider === "codex") {
-    await runCodexTask(task);
-    return;
+    return runCodexTask(task);
   }
 
   if (provider === "openai" && !process.env.OPENAI_API_KEY && process.env.OPENAI_OAUTH_ACCESS_TOKEN) {
-    await runOpenAITask(task);
-    return;
+    return runOpenAITask(task);
   }
 
   if (provider === "gemini" && !process.env.GEMINI_API_KEY) {
-    await runGeminiTask(task);
-    return;
+    return runGeminiTask(task);
   }
 
   if (provider === "openai" || provider === "gemini" || provider === "anthropic" || provider === "ollama") {
-    await runUnifiedProviderTask(task, provider);
-    return;
+    return runUnifiedProviderTask(task, provider);
   }
 
-  await runCodexTask(task);
+  return runCodexTask(task);
 }
 
 function demoOutput(agentId: AgentId, round: number): string {
@@ -1366,12 +1498,28 @@ function demoOutput(agentId: AgentId, round: number): string {
   return `1) STATUS: ${round >= 2 ? "PASS" : "REVISE"}\n\n2) MERGED_RESULT: sample\n\n3) NEXT_ACTIONS:\n1. sample\n\n4) RISKS:\n- None`;
 }
 
-async function runDemoTask(task: AgentTask): Promise<void> {
+async function runDemoTask(task: AgentTask): Promise<TokenUsage> {
   await new Promise((resolve) => setTimeout(resolve, 500 + Math.floor(Math.random() * 500)));
   await writeFile(task.outFile, demoOutput(task.agentId, task.round), "utf8");
+  return createTokenUsage();
 }
 
 async function runAgentTask(task: AgentTask): Promise<AgentTaskResult> {
+  try {
+    await _workspaceManager.assertPathContained(task.workspace, { allowRoot: true });
+  } catch (err) {
+    const safetyMsg = err instanceof Error ? err.message : String(err);
+    swarmStore.appendEvent({
+      type: "agent.safety",
+      round: task.round,
+      agentId: task.agentId,
+      level: "error",
+      message: `Workspace safety violation: ${safetyMsg}`,
+    });
+    const digest = hashText(safetyMsg);
+    return { text: `ERROR: ${safetyMsg}`, outFile: task.outFile, sha256: digest, failed: true };
+  }
+
   swarmStore.setAgentState(task.agentId, {
     phase: "running",
     round: task.round,
@@ -1408,15 +1556,23 @@ async function runAgentTask(task: AgentTask): Promise<AgentTaskResult> {
   try {
     await maybeRequireApprovalBeforeAct(task.round, task.agentId);
     await waitIfPaused(task.round, `${task.agentId}-act`);
-    if (task.mode === "demo") {
-      await runDemoTask(task);
-    } else {
-      await runProviderTask(task);
-    }
+
+    const execution = task.mode === "demo" ? runDemoTask(task) : runProviderTask(task);
+    const usage = await runWithStallTimeout(execution, STALL_TIMEOUT_MS, () => {
+      swarmStore.appendEvent({
+        type: "agent.stalled",
+        round: task.round,
+        agentId: task.agentId,
+        level: "warn",
+        message: `${task.agentId} stalled after ${STALL_TIMEOUT_MS}ms with no output; aborting.`,
+        metadata: { stallTimeoutMs: STALL_TIMEOUT_MS },
+      });
+    });
 
     const text = await readFile(task.outFile, "utf8");
     const digest = hashText(text);
     const excerpt = summarizeOutput(text);
+    const sessionTotals = tokenTracker.recordDelta(createTaskTokenSessionId(task), usage);
 
     swarmStore.setAgentState(task.agentId, {
       phase: "completed",
@@ -1429,7 +1585,11 @@ async function runAgentTask(task: AgentTask): Promise<AgentTaskResult> {
       round: task.round,
       agentId: task.agentId,
       message: `${task.agentId} finished.`,
-      metadata: { sha256: digest },
+      metadata: {
+        sha256: digest,
+        tokenUsage: usage,
+        sessionTotals,
+      },
     });
 
     for (const issue of verifyOutputSafety(text)) {
@@ -1527,26 +1687,27 @@ async function runResearch(
   await maybeRequireApprovalBeforeAct(round, "research");
   await waitIfPaused(round, "research-act");
 
-  if (mode === "demo") {
-    await writeFile(outFile, demoOutput("research", round), "utf8");
-    const txt = await readFile(outFile, "utf8");
-    const digest = hashText(txt);
-    swarmStore.setAgentState("research", {
-      phase: "completed",
-      round,
-      endedAt: nowIso(),
+    if (mode === "demo") {
+      await writeFile(outFile, demoOutput("research", round), "utf8");
+      const txt = await readFile(outFile, "utf8");
+      const digest = hashText(txt);
+      const tokenUsage = tokenTracker.getSessionTotals(`research:round:${round}`);
+      swarmStore.setAgentState("research", {
+        phase: "completed",
+        round,
+        endedAt: nowIso(),
       outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
       excerpt: summarizeOutput(txt),
       pdaStage: "act",
       taskTarget: "broadcast",
     });
-    swarmStore.appendEvent({
-      type: "agent.finished",
-      round,
-      agentId: "research",
-      message: "research finished.",
-      metadata: { sha256: digest },
-    });
+      swarmStore.appendEvent({
+        type: "agent.finished",
+        round,
+        agentId: "research",
+        message: "research finished.",
+        metadata: { sha256: digest, tokenUsage, sessionTotals: tokenUsage },
+      });
     await appendMessage(
       roundDir,
       message({
@@ -1688,25 +1849,26 @@ async function runResearch(
       }
     }
   }
-  const text = textLines.join("\n");
-  await writeFile(outFile, text, "utf8");
-  const digest = hashText(text);
-  swarmStore.setAgentState("research", {
-    phase: "completed",
-    round,
-    endedAt: nowIso(),
+    const text = textLines.join("\n");
+    await writeFile(outFile, text, "utf8");
+    const digest = hashText(text);
+    const tokenUsage = tokenTracker.getSessionTotals(`research:round:${round}`);
+    swarmStore.setAgentState("research", {
+      phase: "completed",
+      round,
+      endedAt: nowIso(),
     outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
     excerpt: summarizeOutput(text),
     pdaStage: "act",
     taskTarget: "broadcast",
   });
-  swarmStore.appendEvent({
-    type: "agent.finished",
-    round,
-    agentId: "research",
-    message: "research finished.",
-    metadata: { sha256: digest },
-  });
+    swarmStore.appendEvent({
+      type: "agent.finished",
+      round,
+      agentId: "research",
+      message: "research finished.",
+      metadata: { sha256: digest, tokenUsage, sessionTotals: tokenUsage },
+    });
   await appendMessage(
     roundDir,
     message({
@@ -2014,10 +2176,11 @@ async function runCoordinatorEnsemble(
   const results = await Promise.all(
     variants.map(async (variant) => {
       const variantOut = path.join(roundDir, `coordinator-${variant.id}.md`);
+      let tokenUsage = createTokenUsage();
       if (mode === "demo") {
         await writeFile(variantOut, demoOutput("coordinator", round), "utf8");
       } else {
-        await runProviderTask({
+        tokenUsage = await runProviderTask({
           agentId: "coordinator",
           round,
           prompt: `${prompt}${variant.suffix}`,
@@ -2046,9 +2209,15 @@ async function runCoordinatorEnsemble(
         status: parseCoordinatorStatus(text),
         outFile: variantOut,
         sha256: hashText(text),
+        tokenUsage,
       };
     }),
   );
+  const totalTokenUsage = results.reduce(
+    (usage, result) => addTokenUsage(usage, result.tokenUsage),
+    createTokenUsage(),
+  );
+  const sessionTotals = tokenTracker.recordDelta(`coordinator:round:${round}`, totalTokenUsage);
 
   const votes: Record<string, number> = {};
   for (const item of results) {
@@ -2070,6 +2239,17 @@ async function runCoordinatorEnsemble(
     endedAt: nowIso(),
     excerpt: summarizeOutput(selected.text),
     pdaStage: "act",
+  });
+  swarmStore.appendEvent({
+    type: "agent.finished",
+    round,
+    agentId: "coordinator",
+    message: "coordinator finished.",
+    metadata: {
+      sha256: selected.sha256,
+      tokenUsage: totalTokenUsage,
+      sessionTotals,
+    },
   });
   await appendMessage(
     roundDir,
@@ -2147,6 +2327,7 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
 
   for (let round = 1; round <= opts.maxRounds; round += 1) {
     const features = swarmStore.getState().features;
+    const roundTokenBaseline = tokenTracker.getAggregateTotals();
     await waitIfPaused(round, "round_start");
     swarmStore.setCurrentRound(round);
     swarmStore.appendEvent({ type: "round.started", round, message: `Round ${round} started.` });
@@ -2247,36 +2428,35 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
     const worker2Promise =
       features.heuristicSelector && changedFiles.length === 0
         ? (async () => {
-            worker2Skipped = true;
-            const outFile = path.join(roundDir, "worker2.md");
-            const text =
-              "1) COVERAGE TABLE:\n- no tracked file changes\n\n2) DEFECTS:\n- none\n\n3) PERFORMANCE CHECK:\n- skipped\n\n4) DECISION: SKIPPED_NO_CHANGES";
-            await writeFile(outFile, text, "utf8");
-            swarmStore.setAgentState("worker2", {
-              phase: "completed",
-              round,
-              startedAt: nowIso(),
-              endedAt: nowIso(),
-              outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
-              excerpt: "Auditor skipped by selector.",
-              pdaStage: "act",
-              taskTarget: "coordinator",
-            });
-            return { text, outFile, sha256: hashText(text), failed: false } as AgentTaskResult;
-          })()
-        : runAgentTask({
-            agentId: "worker2",
+          worker2Skipped = true;
+          const outFile = path.join(roundDir, "worker2.md");
+          const text =
+            "1) COVERAGE TABLE:\n- no tracked file changes\n\n2) DEFECTS:\n- none\n\n3) PERFORMANCE CHECK:\n- skipped\n\n4) DECISION: SKIPPED_NO_CHANGES";
+          await writeFile(outFile, text, "utf8");
+          swarmStore.setAgentState("worker2", {
+            phase: "completed",
             round,
-            prompt: `${baseW2}${researchSuffix}${batchArtifactSuffix}${worker2DirectiveSuffix}\n\n--- TRACKED CHANGED FILES ---\n${
-              changedFiles.length ? changedFiles.join("\n") : "(none)"
-            }\n\n--- WORKER-1 OUTPUT ---\n${maybeCompress(worker1.text, features.contextCompression)}`,
-            outFile: path.join(roundDir, "worker2.md"),
-            workspace: opts.workspace,
-            mode: opts.mode,
-            roundDir,
-            target: "coordinator",
-            execution: roleExecutions.worker2,
+            startedAt: nowIso(),
+            endedAt: nowIso(),
+            outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
+            excerpt: "Auditor skipped by selector.",
+            pdaStage: "act",
+            taskTarget: "coordinator",
           });
+          return { text, outFile, sha256: hashText(text), failed: false } as AgentTaskResult;
+        })()
+        : runAgentTask({
+          agentId: "worker2",
+          round,
+          prompt: `${baseW2}${researchSuffix}${batchArtifactSuffix}${worker2DirectiveSuffix}\n\n--- TRACKED CHANGED FILES ---\n${changedFiles.length ? changedFiles.join("\n") : "(none)"
+            }\n\n--- WORKER-1 OUTPUT ---\n${maybeCompress(worker1.text, features.contextCompression)}`,
+          outFile: path.join(roundDir, "worker2.md"),
+          workspace: opts.workspace,
+          mode: opts.mode,
+          roundDir,
+          target: "coordinator",
+          execution: roleExecutions.worker2,
+        });
 
     const [worker2, evaluator] = await Promise.all([worker2Promise, evaluatorPromise]);
     prevFeedback = evaluator.text;
@@ -2323,24 +2503,24 @@ ${maybeCompress(evaluator.text, features.contextCompression)}
 
     const coordinator: AgentTaskResult | EnsembleTaskResult = features.ensembleVoting
       ? await runCoordinatorEnsemble(
-          round,
-          opts.workspace,
-          opts.mode,
-          roundDir,
-          coordinatorPrompt,
-          roleExecutions.coordinator,
-        )
+        round,
+        opts.workspace,
+        opts.mode,
+        roundDir,
+        coordinatorPrompt,
+        roleExecutions.coordinator,
+      )
       : await runAgentTask({
-          agentId: "coordinator",
-          round,
-          prompt: coordinatorPrompt,
-          outFile: path.join(roundDir, "coordinator.md"),
-          workspace: opts.workspace,
-          mode: opts.mode,
-          roundDir,
-          target: "broadcast",
-          execution: roleExecutions.coordinator,
-        });
+        agentId: "coordinator",
+        round,
+        prompt: coordinatorPrompt,
+        outFile: path.join(roundDir, "coordinator.md"),
+        workspace: opts.workspace,
+        mode: opts.mode,
+        roundDir,
+        target: "broadcast",
+        execution: roleExecutions.coordinator,
+      });
 
     const coordStatus = parseCoordinatorStatus(coordinator.text);
     const worker2Decision = parseWorker2Decision(worker2.text) || (worker2Skipped ? "SKIPPED_NO_CHANGES" : undefined);
@@ -2361,6 +2541,8 @@ ${maybeCompress(evaluator.text, features.contextCompression)}
         : `Tracked changed files: ${changedFiles.slice(0, 6).join(", ")}`,
     );
     notes.push(...parseRisks(coordinator.text));
+    const roundTokenTotals = subtractTokenUsage(tokenTracker.getAggregateTotals(), roundTokenBaseline);
+    notes.push(`Tokens: ${formatTokenUsage(roundTokenTotals)}`);
 
     swarmStore.upsertRound({
       round,
@@ -2371,6 +2553,7 @@ ${maybeCompress(evaluator.text, features.contextCompression)}
       lintPassed: lint.passed,
       auditorSkipped: worker2Skipped,
       changedFiles: changedFiles.slice(0, 20),
+      tokenTotals: roundTokenTotals,
       notes,
     });
 
@@ -2378,7 +2561,14 @@ ${maybeCompress(evaluator.text, features.contextCompression)}
       type: "round.finished",
       round,
       message: `Round ${round} finished with ${finalStatus}.`,
-      metadata: { worker2Decision, evalStatus, coordStatus, lintPassed: lint.passed },
+      metadata: {
+        worker2Decision,
+        evalStatus,
+        coordStatus,
+        lintPassed: lint.passed,
+        roundTokenTotals,
+        aggregateTokenTotals: tokenTracker.getAggregateTotals(),
+      },
     });
 
     carryW1Directives = mergeDirectiveLists(carryW1Directives, parseStructuredSection(evaluator.text, "PROMPT_UPDATES_W1"), 10);
@@ -2471,12 +2661,14 @@ export function startSwarmRun(options: StartOptions = {}): StartResult {
   const maxRounds = clampRounds(options.maxRounds);
   const workspace = path.resolve(options.workspace || PROJECT_ROOT);
   const mode = resolveRunMode(options.mode);
+  tokenTracker.reset();
   const runId = swarmStore.startRun({
     workspace,
     maxRounds,
     mode,
     features: options.features,
   });
+  IOCoordinator.reset();
   const features = swarmStore.getState().features;
 
   activeRunPromise = runSwarm({ maxRounds, workspace, mode })
