@@ -97,10 +97,11 @@ function assertConfigValue(value: string | undefined, label: string): string {
 }
 
 function buildLinearFilter(projectSlug: string | undefined, states: string[]): string {
-  const stateFilters = states.map((state) => `{ name: { eq: "${state.replace(/"/g, '\\"')}" } }`).join(", ");
+  const escape = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const stateFilters = states.map((state) => `{ name: { eq: "${escape(state)}" } }`).join(", ");
   const filters = [`state: { or: [${stateFilters}] }`];
   if (projectSlug?.trim()) {
-    filters.push(`team: { key: { eq: "${projectSlug.replace(/"/g, '\\"')}" } }`);
+    filters.push(`team: { key: { eq: "${escape(projectSlug)}" } }`);
   }
   return filters.join(" ");
 }
