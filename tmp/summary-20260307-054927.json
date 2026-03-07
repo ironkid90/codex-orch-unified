@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-03-07T05:49:27+02:00",
+  "objective": "Strengthen backend IO coordination and token-efficiency telemetry in the codex-orch-unified swarm runtime, with a compact diagnostics surface in the existing dashboard.",
+  "changes": [
+    {
+      "path": "lib/swarm/types.ts",
+      "summary": "Added typed IO coordinator snapshot models and default state factory."
+    },
+    {
+      "path": "lib/swarm/store.ts",
+      "summary": "Added IO coordinator state updates and transient SSE broadcasts without polluting the visible event log."
+    },
+    {
+      "path": "lib/swarm/io-coordinator.ts",
+      "summary": "Refactored the coordinator into a stateful telemetry collector tracking retries, latency, failures, active calls, and context-compression savings."
+    },
+    {
+      "path": "lib/swarm/engine.ts",
+      "summary": "Registered IO telemetry publishing into swarm state and reset coordinator metrics at run start."
+    },
+    {
+      "path": "app/page.tsx",
+      "summary": "Added an IO diagnostics panel showing retries, latency, failure state, and estimated token savings."
+    }
+  ],
+  "commands": [
+    {
+      "command": "npm run typecheck",
+      "result": "passed"
+    }
+  ],
+  "verification": {
+    "typecheck": "passed"
+  },
+  "outcome": "Backend IO coordination now publishes typed runtime metrics into the swarm state, exposing retry pressure and estimated context savings needed to control token costs in multi-agent runs."
+}

@@ -34,6 +34,11 @@ export interface RoundSummary {
   lintPassed?: boolean;
   auditorSkipped?: boolean;
   changedFiles?: string[];
+  tokenTotals?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
   notes: string[];
 }
 
@@ -94,6 +99,60 @@ export interface SwarmFeatures {
   approveNextActionGate: boolean;
 }
 
+export interface IoCoordinatorLastError {
+  operationName: string;
+  message: string;
+  at: string;
+  status?: number;
+  code?: string;
+}
+
+export interface IoOperationSnapshot {
+  name: string;
+  callCount: number;
+  successCount: number;
+  failureCount: number;
+  retryCount: number;
+  totalDurationMs: number;
+  averageDurationMs: number;
+  maxDurationMs: number;
+  lastDurationMs?: number;
+  lastAttemptCount?: number;
+  lastStartedAt?: string;
+  lastCompletedAt?: string;
+  lastErrorMessage?: string;
+  lastErrorAt?: string;
+  lastStatus?: number;
+  lastCode?: string;
+}
+
+export interface IoContextOptimizationSnapshot {
+  callCount: number;
+  originalMessageCount: number;
+  optimizedMessageCount: number;
+  droppedMessageCount: number;
+  originalEstimatedChars: number;
+  optimizedEstimatedChars: number;
+  estimatedTokensSaved: number;
+  lastAppliedAt?: string;
+}
+
+export interface IoCoordinatorSnapshot {
+  totalCalls: number;
+  completedCalls: number;
+  successCount: number;
+  failureCount: number;
+  activeCalls: number;
+  totalRetries: number;
+  totalDurationMs: number;
+  averageDurationMs: number;
+  maxDurationMs: number;
+  lastUpdatedAt?: string;
+  lastError?: IoCoordinatorLastError;
+  operations: IoOperationSnapshot[];
+  contextOptimization: IoContextOptimizationSnapshot;
+}
+
 export interface SwarmRunState {
   runId: string | null;
   mode: RunMode;
@@ -114,6 +173,7 @@ export interface SwarmRunState {
   ensembles: EnsembleResult[];
   events: SwarmEvent[];
   errors: string[];
+  ioCoordinator: IoCoordinatorSnapshot;
 }
 
 export const AGENT_IDS: AgentId[] = [
@@ -134,6 +194,30 @@ export const DEFAULT_FEATURES: SwarmFeatures = {
   humanInLoop: true,
   approveNextActionGate: false,
 };
+
+export function createIoCoordinatorDefaults(): IoCoordinatorSnapshot {
+  return {
+    totalCalls: 0,
+    completedCalls: 0,
+    successCount: 0,
+    failureCount: 0,
+    activeCalls: 0,
+    totalRetries: 0,
+    totalDurationMs: 0,
+    averageDurationMs: 0,
+    maxDurationMs: 0,
+    operations: [],
+    contextOptimization: {
+      callCount: 0,
+      originalMessageCount: 0,
+      optimizedMessageCount: 0,
+      droppedMessageCount: 0,
+      originalEstimatedChars: 0,
+      optimizedEstimatedChars: 0,
+      estimatedTokensSaved: 0,
+    },
+  };
+}
 
 export function createAgentDefaults(): Record<AgentId, AgentState> {
   return {
