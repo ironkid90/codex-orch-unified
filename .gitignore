@@ -44,8 +44,26 @@ __pycache__/
 *.zip
 *.7z
 
+# Logs
+*.log
+firebase-debug.log
+
+# Stale subdirectories (not part of main project)
+code-index-mcp/
+swiss-knife-temp/
+multi-codex/
+my-app/
+
 # OS and editor noise
 .DS_Store
 Thumbs.db
 .vscode/*.log
 roocode-ref
+
+# Local tooling session identifiers (machine-specific, changes frequently)
+.kilocode/session-id
+
+# Temporary agent session files
+tmp/
+engine.diff
+compile_errors.txt
