@@ -49,3 +49,7 @@ __pycache__/
 Thumbs.db
 .vscode/*.log
 roocode-ref
+
+# Firebase debug logs
+firebase-debug.log
+*-debug.log

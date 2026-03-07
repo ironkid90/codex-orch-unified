@@ -38,9 +38,13 @@ export class GraphExecutor {
   }
 
   createInitialState(runId: string): GraphExecutionState {
+    const entryNodeId = this.graph.entryNodeId ?? this.graph.entryNodes?.[0];
+    if (!entryNodeId) {
+      throw new Error("Graph must have entryNodeId or entryNodes defined");
+    }
     return {
       graphId: this.graph.id, runId,
-      currentNodeIds: [this.graph.entryNodeId],
+      currentNodeIds: [entryNodeId],
       completedNodeIds: [], failedNodeIds: [], skippedNodeIds: [],
       nodeResults: {}, context: {}, startedAt: nowIso(), status: "running",
     };
@@ -85,7 +89,7 @@ export class GraphExecutor {
       currentNodeIds: state.currentNodeIds.filter((id) => id !== nodeId),
       completedNodeIds: result.status === "completed" ? [...state.completedNodeIds, nodeId] : state.completedNodeIds,
       failedNodeIds:    result.status === "failed"    ? [...state.failedNodeIds,    nodeId] : state.failedNodeIds,
-      skippedNodeIds:   result.status === "skipped"   ? [...state.skippedNodeIds,   nodeId] : state.skippedNodeIds,
+      skippedNodeIds:   result.status === "skipped"   ? [...(state.skippedNodeIds ?? []),   nodeId] : state.skippedNodeIds,
     };
     const toQueue: string[] = [];
     for (const candidate of this.getNextNodes(next, nodeId)) {
