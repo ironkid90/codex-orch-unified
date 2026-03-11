@@ -31,20 +31,38 @@ export type GraphEdgeType = z.infer<typeof GraphEdgeTypeSchema>;
 
 // ─── Node Definition ─────────────────────────────────────────────────────────
 
-export const GraphNodeSchema = z.object({
-  id: z.string(),
-  type: GraphNodeTypeSchema,
-  label: z.string().optional(),
-  /** Agent role ID (for agent nodes) */
-  agentRole: z.string().optional(),
-  /** Gate condition expression (for gate nodes) */
-  condition: z.string().optional(),
-  /** Max retries before giving up */
-  maxRetries: z.number().int().min(0).max(5).default(0),
-  /** Timeout in ms */
-  timeoutMs: z.number().positive().optional(),
-  metadata: z.record(z.unknown()).optional(),
-});
+export const GraphNodeSchema = z
+  .object({
+    id: z.string(),
+    type: GraphNodeTypeSchema,
+    label: z.string().optional(),
+    /** Agent role ID (for agent nodes) */
+    agentRole: z.string().optional(),
+    /** Gate condition expression (for gate nodes) */
+    condition: z.string().optional(),
+    /** Max retries before giving up */
+    maxRetries: z.number().int().min(0).max(5).default(0),
+    /** Timeout in ms */
+    timeoutMs: z.number().positive().optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .superRefine((node, ctx) => {
+    if (node.type === "agent" && !node.agentRole) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["agentRole"],
+        message: "agentRole is required for agent nodes",
+      });
+    }
+
+    if (node.type === "gate" && !node.condition) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["condition"],
+        message: "condition is required for gate nodes",
+      });
+    }
+  });
 
 export type GraphNode = z.infer<typeof GraphNodeSchema>;
 
@@ -118,7 +136,7 @@ export const NodeExecutionResultSchema = z.object({
   completedAt: z.number().optional(),
   output: z.unknown().optional(),
   error: z.string().optional(),
-  retryCount: z.number().int().default(0),
+  retryCount: z.number().int().min(0).default(0),
 });
 
 export type NodeExecutionResult = z.infer<typeof NodeExecutionResultSchema>;
