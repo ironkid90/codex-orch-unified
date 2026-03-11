@@ -62,3 +62,8 @@ roocode-ref
 
 # Local tooling session identifiers (machine-specific, changes frequently)
 .kilocode/session-id
+
+# Temporary agent session files
+tmp/
+engine.diff
+compile_errors.txt
