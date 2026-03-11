@@ -19,10 +19,18 @@ This repository now includes a real-time swarm dashboard with:
 - Checkpoints, lint results, and ensemble outcomes.
 - Unified CLI for setup, run, and deploy flows.
 
+## Recent Architectural Improvements
+
+- **Graph DSL Workflow Engine**: Moved from a hardcoded fan-out/fan-in loop to a dynamic node-and-edge workflow graph built with a new DSL (domain-specific language) in `lib/swarm/graph-dsl.ts`.
+- **Run History Persistence**: Tracks local and batch runs spanning multiple rounds with agent usage metrics written to immutable logs in `runs/history/`.
+- **Dynamic Provider Routing**: Decouples roles from hardcoded models. Uses heuristic thresholds and a multi-level fallback chain resolving via `config/model-routing.json` to intelligently route tasks per capability.
+- **Robust Test Infrastructure**: Replaced older scripts with a robust unified `vitest` infrastructure covering orchestration, parsing, and DSL validations, enforced via comprehensive `.github/workflows/ci.yml` CI/CD actions.
+- **OpenTelemetry Observability**: Spans and traces instrumenting agent PDA loops directly in `lib/swarm/engine.ts`.
+
 ## Architecture
 
 - `run-swarm.ps1` remains available.
-- New runtime lives in `lib/swarm/engine.ts`.
+- New runtime lives in `lib/swarm/engine.ts`. (Wired to the Graph DSL executor).
 - Parsing/verification utilities:
 - `lib/swarm/parse.ts` for status/decision extraction.
 - `lib/swarm/verifier.ts` for deterministic safety checks.
@@ -31,58 +39,99 @@ This repository now includes a real-time swarm dashboard with:
 - `app/page.tsx`
 - `app/api/swarm/*`
 
-## Localhost
+## Deployment (From Scratch) & Local Setup
 
-1. Install Node dependencies:
+### Prerequisites
+
+- Node.js >= 20.0 (Recommend `nvm` or `fnm`)
+- Python >= 3.10
+- Git
+
+### 1. Clone & Bootstrap
+
 ```bash
-npm install
+git clone <your-repo-url> codex-orch
+cd codex-orch
 ```
 
-2. Bootstrap Python/Foundry side:
-```bash
-npm run bootstrap
-```
+### 2. Environment Configuration
 
-3. Start the app:
-```bash
-npm run dev
-```
-
-4. Open:
-```text
-http://localhost:3000
-```
-
-5. Click **Start swarm**.
-
-Optional environment bootstrap:
 ```bash
 cp .env.example .env.local
 ```
 
-## Unified Commands (GUI + CLI + Agent)
+Add your respective API keys to `.env.local` (e.g., `OPENAI_API_KEY`, `GEMINI_API_KEY`) and toggle any capabilities (like `SWARM_WEB_SEARCH=1`).
 
-- Health check:
+### 3. Install Dependencies & Build
+
+Our `package.json` relies on a centralized boostrap script to simultaneously prep both the monolithic Node environment and the Python `.venv` environment for the Agent Framework wrapper.
+
 ```bash
-npm run doctor
-```
-- Compile all stacks:
-```bash
+npm install
+npm run bootstrap
 npm run build:all
 ```
-- GUI only (Next.js):
-```bash
-npm run dev:gui
-```
-- Agent server only (Foundry workflow):
-```bash
-npm run dev:agent
-```
-- GUI + agent server together:
+
+### 4. Interactive Execution
+
+**To run the GUI (Next.js Dashboard) + Agent Server in parallel:**
+
 ```bash
 npm run dev:all
 ```
+
+Open [http://localhost:3000](http://localhost:3000) and click **Start swarm**.
+
+**To run via CLI only:**
+
+```bash
+npm run swarm:run -- --mode local --max-rounds 3
+```
+
+### 5. Multi-Runtime Docker Deployment
+
+If deploying to a pristine environment without local tooling, leverage the multi-stage Docker deployment:
+
+```bash
+docker-compose up --build -d
+```
+
+This orchestrates the Node dashboard, backend APIs, Python foundry service, and tracer services autonomously.
+
+## Unified Commands (GUI + CLI + Agent)
+
+- Health check:
+
+```bash
+npm run doctor
+```
+
+- Compile all stacks:
+
+```bash
+npm run build:all
+```
+
+- GUI only (Next.js):
+
+```bash
+npm run dev:gui
+```
+
+- Agent server only (Foundry workflow):
+
+```bash
+npm run dev:agent
+```
+
+- GUI + agent server together:
+
+```bash
+npm run dev:all
+```
+
 - Swarm CLI:
+
 ```bash
 npm run swarm:run -- --mode local --max-rounds 3
 ```
@@ -128,10 +177,12 @@ Runtime behavior:
   - launch config: `Orch: Debug Agent HTTP (Inspector)`
 
 Copilot chat integration:
+
 - Repo prompt files are in `.github/prompts/`.
 - Use `.github/prompts/orch-next-action.prompt.md` for iterative “next best action” workflows.
 
 OpenAI Codex extension integration:
+
 - Runtime/command guide is in `AGENTS.md` at repo root.
 - This keeps IDE agents aligned on standard commands and file entrypoints.
 
@@ -154,6 +205,7 @@ Or via PowerShell entrypoint:
 ```
 
 Interactive terminal controls during `swarm:run`:
+
 - `pause`
 - `resume`
 - `rewind <round>`
@@ -165,40 +217,51 @@ Notes:
 - `demo` mode simulates agent outputs for UI/testing.
 - On critical regression, checkpoint rewind can trigger automatically.
 - Codex executable override:
+
 ```bash
 SWARM_CODEX_BIN=codex
 ```
 
 Gemini provider options (optional):
+
 - API key mode:
+
 ```bash
 SWARM_RESEARCH_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3-pro
 ```
+
 - Google login mode:
+
 ```bash
 SWARM_RESEARCH_PROVIDER=gemini
 GOOGLE_USE_ADC=1
 GEMINI_MODEL=gemini-3-pro
 ```
+
 When `GOOGLE_USE_ADC=1`, the runtime attempts:
 `gcloud auth application-default print-access-token`.
 
 External web research adapter (optional):
+
 - Bing RSS mode (no API key):
+
 ```bash
 SWARM_WEB_SEARCH=1
 SWARM_WEB_SEARCH_PROVIDER=bing
 SWARM_WEB_SEARCH_MAX_RESULTS=6
 ```
+
 - Tavily mode (API key required):
+
 ```bash
 SWARM_WEB_SEARCH=1
 SWARM_WEB_SEARCH_PROVIDER=tavily
 TAVILY_API_KEY=...
 SWARM_WEB_SEARCH_MAX_RESULTS=6
 ```
+
 When enabled, the research agent appends ranked web sources to `research.md` and injects them into downstream prompt context.
 
 ## Batch multi-agent pipeline (MetaGPT-style)
@@ -206,6 +269,7 @@ When enabled, the research agent appends ranked web sources to `research.md` and
 This repo now ships a Batch-friendly, document-driven multi-agent scaffold (PRD → design → plan → code → QA) using OpenAI `/v1/responses`.
 
 Quick start:
+
 ```bash
 cp .env.example .env.local   # set OPENAI_API_KEY and optional batch envs
 npm install                  # installs openai client
@@ -214,6 +278,7 @@ npm run batch:run            # uploads shards, creates batches, polls, validates
 ```
 
 Key files:
+
 - `batch/agents.json` — role configs + strict JSON schemas for ProductManager, Architect, ProjectManager, Engineer, QA.
 - `batch/tasks.jsonl` — task queue (one line per request) with structured custom IDs.
 - `scripts/batch/gen_shards.mjs` — worker-thread shard builder (respects `SHARD_MAX_LINES`).
@@ -223,6 +288,7 @@ Key files:
 - `batch/out/merge_report.json` (summary)
 
 Env knobs:
+
 - `OPENAI_BATCH_MODEL` (default `gpt-4o-mini`)
 - `BATCH_PROJECT`, `SHARD_MAX_LINES`, `UPLOAD_CONCURRENCY`, `POLL_INTERVAL_MS`
 - `BATCH_ENDPOINT` (default `/v1/responses`), `BATCH_COMPLETION_WINDOW` (default `24h`)
@@ -230,9 +296,11 @@ Env knobs:
 - `SWARM_BATCH_MERGED_FILE` to point swarm runtime at the merged artifact file (default `batch/out/merged_output.jsonl`)
 
 Swarm ingestion:
+
 - When `SWARM_BATCH_MERGED_FILE` exists, swarm injects condensed PRD/design/task artifacts into Worker-1, Worker-2, Evaluator, and Coordinator prompts.
 
 Human gating:
+
 - Enable per-agent manual approval gates before each `act` by toggling `approveNextActionGate` in UI features or via CLI (`--approveNextActionGate` / `--no-approveNextActionGate`).
 
 ## Microsoft Agent Framework workflow (Python)
@@ -290,11 +358,13 @@ VS Code debugging:
 Deploy as a standard Next.js project.
 
 One-click preview deploy:
+
 ```bash
 npm run swarm:deploy
 ```
 
 Production deploy (explicit):
+
 ```bash
 npm run swarm:deploy -- --prod
 ```
