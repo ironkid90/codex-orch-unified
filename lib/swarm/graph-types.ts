@@ -1,55 +1,110 @@
+/**
+ * W2: Graph DSL Type System
+ * Defines all types for the workflow graph DSL.
+ */
+
 import { z } from "zod";
 
-export const GraphNodeTypeSchema = z.enum(["agent","gate","merge","branch","checkpoint","human-review"]);
+// ─── Node Types ──────────────────────────────────────────────────────────────
+
+export const GraphNodeTypeSchema = z.enum([
+  "agent",        // An AI agent execution node
+  "gate",         // Conditional gate — passes or blocks flow
+  "merge",        // Waits for all incoming branches to complete
+  "branch",       // Fan-out to multiple parallel paths
+  "checkpoint",   // Saves state; supports rewind
+  "human-review", // Pauses for human approval before proceeding
+]);
+
 export type GraphNodeType = z.infer<typeof GraphNodeTypeSchema>;
 
-export const GraphEdgeTypeSchema = z.enum(["sequential","conditional","parallel","fallback"]);
+// ─── Edge Types ──────────────────────────────────────────────────────────────
+
+export const GraphEdgeTypeSchema = z.enum([
+  "sequential",  // A → B, simple ordering
+  "conditional", // A → B only if condition passes
+  "parallel",    // A → [B, C, D] fan-out
+  "fallback",    // A → B only if A fails
+]);
+
 export type GraphEdgeType = z.infer<typeof GraphEdgeTypeSchema>;
 
+// ─── Node Definition ─────────────────────────────────────────────────────────
+
 export const GraphNodeSchema = z.object({
-  id: z.string().min(1),
+  id: z.string(),
   type: GraphNodeTypeSchema,
   label: z.string().optional(),
+  /** Agent role ID (for agent nodes) */
   agentRole: z.string().optional(),
-  predicate: z.string().optional(),
+  /** Gate condition expression (for gate nodes) */
+  condition: z.string().optional(),
+  /** Max retries before giving up */
+  maxRetries: z.number().int().min(0).max(5).default(0),
+  /** Timeout in ms */
+  timeoutMs: z.number().positive().optional(),
   metadata: z.record(z.unknown()).optional(),
 });
+
 export type GraphNode = z.infer<typeof GraphNodeSchema>;
 
-export const GraphEdgeSchema = z.object({
-  id: z.string().min(1),
-  from: z.string().min(1),
-  to: z.string().min(1),
-  type: GraphEdgeTypeSchema,
-  condition: z.string().optional(),
-  priority: z.number().int().optional(),
-});
-export type GraphEdge = z.infer<typeof GraphEdgeSchema>;
+// ─── Edge Definition ─────────────────────────────────────────────────────────
 
-export const WorkflowGraphSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().optional(),
-  version: z.string().optional(),
-  nodes: z.array(GraphNodeSchema),
-  edges: z.array(GraphEdgeSchema),
-  entryNodeId: z.string().min(1),
-  exitNodeIds: z.array(z.string()),
+export const GraphEdgeSchema = z.object({
+  id: z.string(),
+  from: z.string(),
+  to: z.string(),
+  type: GraphEdgeTypeSchema,
+  /** Condition expression for conditional edges */
+  condition: z.string().optional(),
+  label: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
 });
+
+export type GraphEdge = z.infer<typeof GraphEdgeSchema>;
+
+// ─── Workflow Graph ───────────────────────────────────────────────────────────
+
+export const WorkflowGraphSchema = z.object({
+  id: z.string(),
+  version: z.string().default("1.0"),
+  name: z.string(),
+  description: z.string().optional(),
+  nodes: z.array(GraphNodeSchema).min(1),
+  edges: z.array(GraphEdgeSchema),
+  /** Entry point node IDs (no incoming edges) */
+  entryNodes: z.array(z.string()).min(1),
+  /** Terminal node IDs (no outgoing edges) */
+  exitNodes: z.array(z.string()).min(1),
+  metadata: z.record(z.unknown()).optional(),
+  createdAt: z.string().datetime().optional(),
+});
+
 export type WorkflowGraph = z.infer<typeof WorkflowGraphSchema>;
 
-export const NodeExecutionStatusSchema = z.enum(["pending","running","completed","failed","skipped"]);
+// ─── Execution State ─────────────────────────────────────────────────────────
+
+export const NodeExecutionStatusSchema = z.enum([
+  "pending",
+  "running",
+  "completed",
+  "failed",
+  "skipped",
+  "waiting", // waiting for merge / human review
+]);
+
 export type NodeExecutionStatus = z.infer<typeof NodeExecutionStatusSchema>;
 
 export const NodeExecutionResultSchema = z.object({
   nodeId: z.string(),
   status: NodeExecutionStatusSchema,
-  startedAt: z.string().optional(),
-  endedAt: z.string().optional(),
-  output: z.string().optional(),
+  startedAt: z.number().optional(),
+  completedAt: z.number().optional(),
+  output: z.unknown().optional(),
   error: z.string().optional(),
-  round: z.number().int().optional(),
+  retryCount: z.number().int().default(0),
 });
+
 export type NodeExecutionResult = z.infer<typeof NodeExecutionResultSchema>;
 
 export const GraphExecutionStateSchema = z.object({
@@ -58,11 +113,27 @@ export const GraphExecutionStateSchema = z.object({
   currentNodeIds: z.array(z.string()),
   completedNodeIds: z.array(z.string()),
   failedNodeIds: z.array(z.string()),
-  skippedNodeIds: z.array(z.string()),
   nodeResults: z.record(NodeExecutionResultSchema),
-  context: z.record(z.unknown()),
-  startedAt: z.string(),
-  endedAt: z.string().optional(),
-  status: z.enum(["running","completed","failed","paused"]),
+  isComplete: z.boolean().default(false),
+  isFailed: z.boolean().default(false),
+  startedAt: z.number(),
+  completedAt: z.number().optional(),
+  metadata: z.record(z.unknown()).optional(),
 });
+
 export type GraphExecutionState = z.infer<typeof GraphExecutionStateSchema>;
+
+// ─── Validation Errors ────────────────────────────────────────────────────────
+
+export interface GraphValidationError {
+  type: "missing_node" | "cycle_detected" | "disconnected_node" | "invalid_edge" | "no_entry" | "no_exit";
+  message: string;
+  nodeId?: string;
+  edgeId?: string;
+}
+
+export interface GraphValidationResult {
+  valid: boolean;
+  errors: GraphValidationError[];
+  warnings: string[];
+}

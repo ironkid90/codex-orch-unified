@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { AgentState, RunMode, SwarmFeatures, SwarmRunState } from "@/lib/swarm/types";
+import type { RunMode, SwarmFeatures, SwarmRunState } from "@/lib/swarm/types";
 
 interface StateResponse {
   state: SwarmRunState;
@@ -34,6 +34,12 @@ function statusBadge(status: string): { text: string; cls: string } {
 function formatTime(iso?: string): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleTimeString();
+}
+
+function formatDurationMs(value?: number): string {
+  if (value === undefined || Number.isNaN(value)) return "—";
+  if (value < 1000) return `${Math.round(value)}ms`;
+  return `${(value / 1000).toFixed(2)}s`;
 }
 
 const AGENT_COLORS: Record<string, string> = {
@@ -137,6 +143,14 @@ export default function HomePage() {
   const isRunning = Boolean(state?.running);
   const latestCheckpointRound = state?.checkpoints.at(-1)?.round;
   const agents = state ? Object.values(state.agents) : [];
+  const ioSnapshot = state?.ioCoordinator;
+  const ioCompressionRatio =
+    ioSnapshot && ioSnapshot.contextOptimization.originalEstimatedChars > 0
+      ? Math.max(
+          0,
+          1 - ioSnapshot.contextOptimization.optimizedEstimatedChars / ioSnapshot.contextOptimization.originalEstimatedChars,
+        )
+      : 0;
 
   const toggleFeature = useCallback((feature: keyof SwarmFeatures) => {
     if (isRunning) return;
@@ -427,6 +441,46 @@ export default function HomePage() {
           <section className="glass-card">
             <div className="glass-card-head">
               <h2>Diagnostics</h2>
+            </div>
+
+            <h3 className="section-head">IO Coordinator</h3>
+            <div className="round-list">
+              <div className="round-row">
+                <div className="round-detail">
+                  Calls: {ioSnapshot?.totalCalls ?? 0} · Active: {ioSnapshot?.activeCalls ?? 0} ·
+                  Retries: {ioSnapshot?.totalRetries ?? 0} · Failures: {ioSnapshot?.failureCount ?? 0}
+                  <br />
+                  Avg latency: {formatDurationMs(ioSnapshot?.averageDurationMs)} · Max latency: {formatDurationMs(ioSnapshot?.maxDurationMs)}
+                  <br />
+                  Context saved: {ioSnapshot?.contextOptimization.estimatedTokensSaved ?? 0} est tokens ·
+                  Compression: {(ioCompressionRatio * 100).toFixed(1)}%
+                </div>
+              </div>
+              {ioSnapshot?.lastError && (
+                <div className="round-row">
+                  <div className="round-detail">
+                    Last error: {ioSnapshot.lastError.operationName} · {ioSnapshot.lastError.message}
+                    <br />
+                    {formatTime(ioSnapshot.lastError.at)}
+                    {ioSnapshot.lastError.status !== undefined ? ` · HTTP ${ioSnapshot.lastError.status}` : ""}
+                    {ioSnapshot.lastError.code ? ` · ${ioSnapshot.lastError.code}` : ""}
+                  </div>
+                </div>
+              )}
+              {ioSnapshot?.operations.length ? (
+                ioSnapshot.operations.slice(0, 8).map((operation) => (
+                  <div key={operation.name} className="round-row">
+                    <div className="round-detail">
+                      {operation.name}
+                      <br />
+                      Calls: {operation.callCount} · Retries: {operation.retryCount} ·
+                      Avg: {formatDurationMs(operation.averageDurationMs)} · Max: {formatDurationMs(operation.maxDurationMs)}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="empty-text">No IO telemetry yet.</p>
+              )}
             </div>
 
             <h3 className="section-head">Lint Results</h3>
