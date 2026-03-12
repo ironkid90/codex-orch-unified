@@ -60,9 +60,8 @@ Thumbs.db
 .vscode/*.log
 roocode-ref
 
-<<<<<<< HEAD
-# Local tooling session identifiers
-=======
-# Local tooling session identifiers (machine-specific, changes frequently)
->>>>>>> main
-.kilocode/session-id
+
+# Temporary agent session files
+tmp/
+engine.diff
+compile_errors.txt
