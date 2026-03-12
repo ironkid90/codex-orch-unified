@@ -51,7 +51,6 @@ firebase-debug.log
 # Stale subdirectories (not part of main project)
 code-index-mcp/
 swiss-knife-temp/
-multi-codex/
 my-app/
 
 # OS and editor noise

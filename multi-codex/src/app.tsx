@@ -1,8 +1,33 @@
-import { Suspense, type Component } from 'solid-js';
-import { A, useLocation } from '@solidjs/router';
+import { Suspense, onMount, onCleanup, type Component } from 'solid-js';
+import { A, useLocation, useNavigate } from '@solidjs/router';
+import { Capacitor } from '@capacitor/core';
+import type { PluginListenerHandle } from '@capacitor/core';
+import { App as CapApp } from '@capacitor/app';
 
 const App: Component<{ children: Element }> = (props) => {
   const location = useLocation();
+  const navigate = useNavigate();
+
+  // Handle the Android hardware back button
+  onMount(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    let listener: PluginListenerHandle | undefined;
+
+    CapApp.addListener('backButton', ({ canGoBack }) => {
+      if (canGoBack) {
+        window.history.back();
+      } else {
+        CapApp.exitApp();
+      }
+    }).then((h) => {
+      listener = h;
+    });
+
+    onCleanup(() => {
+      listener?.remove();
+    });
+  });
 
   return (
     <>
