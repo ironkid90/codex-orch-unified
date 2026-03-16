@@ -26,3 +26,12 @@ gitignore
 # System Files
 .DS_Store
 Thumbs.db
+
+# Android build outputs (keep source, ignore compiled artifacts)
+android/app/build/
+android/.gradle/
+android/build/
+android/capacitor-cordova-android-plugins/build/
+android/app/release/
+*.apk
+*.aab
