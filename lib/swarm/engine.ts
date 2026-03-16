@@ -41,6 +41,12 @@ import {
   type ProviderId,
   type RoleExecutionPreference,
 } from "./model-routing";
+import {
+  completeControlRequest,
+  enqueueControlRequest,
+  readQueuedControlRequests,
+  type ControlAction,
+} from "./runtime-state";
 import { swarmStore } from "./store";
 import { AGENT_IDS } from "./types";
 import type {
@@ -51,6 +57,7 @@ import type {
   RoundStatus,
   RunMode,
   SwarmFeatures,
+  SwarmRunState,
 } from "./types";
 import { verifyOutputSafety } from "./verifier";
 // ---- Symphony integration: token accounting + workspace safety ----
@@ -115,6 +122,15 @@ interface StartResult {
   runId: string;
   mode: RunMode;
   features: SwarmFeatures;
+}
+
+interface ControlRequestResult {
+  ok: boolean;
+  queued: boolean;
+  message: string;
+  state: SwarmRunState;
+  requestId?: string;
+  rewind?: { round: number; restoredCount: number };
 }
 
 interface AgentTask {
@@ -279,6 +295,107 @@ function emitAgentLog(
     level,
     message: prefix ? `[${prefix}] ${msg.slice(-320)}` : msg.slice(-360),
   });
+}
+
+function describeControlSource(source?: string): string {
+  return source ? `from ${source}` : "from the external control plane";
+}
+
+async function processQueuedControlRequests(round: number): Promise<void> {
+  const queuedRequests = readQueuedControlRequests();
+  for (const request of queuedRequests) {
+    try {
+      const sourceLabel = describeControlSource(request.source);
+      if (request.action === "pause") {
+        const ok = pauseSwarmRun(request.reason || `Pause requested ${sourceLabel}.`);
+        const message = ok
+          ? `Pause applied ${sourceLabel}.`
+          : "Pause request ignored because the run is already paused or human-in-the-loop is disabled.";
+        completeControlRequest(request, {
+          ok,
+          message,
+          metadata: { round, action: request.action, source: request.source },
+        });
+        if (ok) {
+          swarmStore.appendEvent({
+            type: "run.control",
+            round,
+            level: "warn",
+            message,
+            metadata: { action: request.action, source: request.source, requestId: request.id },
+          });
+        }
+        continue;
+      }
+
+      if (request.action === "resume") {
+        const ok = resumeSwarmRun();
+        const message = ok ? `Resume applied ${sourceLabel}.` : "Resume request ignored because the run is not paused.";
+        completeControlRequest(request, {
+          ok,
+          message,
+          metadata: { round, action: request.action, source: request.source },
+        });
+        if (ok) {
+          swarmStore.appendEvent({
+            type: "run.control",
+            round,
+            message,
+            metadata: { action: request.action, source: request.source, requestId: request.id },
+          });
+        }
+        continue;
+      }
+
+      const requestedRound = Number(request.round);
+      if (!Number.isFinite(requestedRound)) {
+        throw new Error("A valid rewind round is required.");
+      }
+      const rewind = await rewindSwarmToRound(Math.max(1, Math.floor(requestedRound)));
+      const message = `Rewind to round ${rewind.round} applied ${sourceLabel}.`;
+      completeControlRequest(request, {
+        ok: true,
+        message,
+        metadata: {
+          round,
+          action: request.action,
+          source: request.source,
+          restoredCount: rewind.restoredCount,
+          targetRound: rewind.round,
+        },
+      });
+      swarmStore.appendEvent({
+        type: "run.control",
+        round,
+        level: "warn",
+        message,
+        metadata: {
+          action: request.action,
+          source: request.source,
+          requestId: request.id,
+          restoredCount: rewind.restoredCount,
+          targetRound: rewind.round,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      completeControlRequest(request, {
+        ok: false,
+        message,
+        metadata: { round, action: request.action, source: request.source },
+      });
+      const state = swarmStore.getState();
+      if (state.runId) {
+        swarmStore.appendEvent({
+          type: "run.control",
+          round,
+          level: "warn",
+          message: `Control request ${request.action} rejected: ${message}`,
+          metadata: { action: request.action, source: request.source, requestId: request.id },
+        });
+      }
+    }
+  }
 }
 
 async function runProcess(
@@ -1066,6 +1183,7 @@ async function runOpenAIResearch(
 }
 async function waitIfPaused(round: number, gate: string): Promise<void> {
   for (; ;) {
+    await processQueuedControlRequests(round);
     const state = swarmStore.getState();
     if (!state.running) {
       throw new Error("Run no longer active.");
@@ -2326,6 +2444,7 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
   }
 
   for (let round = 1; round <= opts.maxRounds; round += 1) {
+    await processQueuedControlRequests(round);
     const features = swarmStore.getState().features;
     const roundTokenBaseline = tokenTracker.getAggregateTotals();
     await waitIfPaused(round, "round_start");
@@ -2655,6 +2774,150 @@ export async function rewindSwarmToRound(round: number): Promise<{ round: number
     metadata: { targetRound: round, restoredCount },
   });
   return { round, restoredCount };
+}
+
+export async function requestSwarmControl(input: {
+  action: ControlAction;
+  reason?: string;
+  round?: number;
+  source?: string;
+}): Promise<ControlRequestResult> {
+  const state = swarmStore.getState();
+  const localRunActive = Boolean(activeRunPromise);
+
+  if (input.action === "pause") {
+    if (state.running && !state.features.humanInLoop) {
+      return {
+        ok: false,
+        queued: false,
+        message: "Pause/resume controls are disabled because human-in-the-loop is off.",
+        state,
+      };
+    }
+    if (localRunActive) {
+      const ok = pauseSwarmRun(input.reason);
+      return {
+        ok,
+        queued: false,
+        message: ok ? "Run paused." : "Run was not paused.",
+        state: swarmStore.getState(),
+      };
+    }
+    if (state.running) {
+      const requestId = enqueueControlRequest(input);
+      return {
+        ok: true,
+        queued: true,
+        requestId,
+        message: "Pause requested. It will apply after the current step finishes.",
+        state,
+      };
+    }
+    return {
+      ok: false,
+      queued: false,
+      message: "No active run to pause.",
+      state,
+    };
+  }
+
+  if (input.action === "resume") {
+    if (state.running && !state.paused) {
+      return {
+        ok: false,
+        queued: false,
+        message: "Run is not paused.",
+        state,
+      };
+    }
+    if (localRunActive) {
+      const ok = resumeSwarmRun();
+      return {
+        ok,
+        queued: false,
+        message: ok ? "Run resumed." : "Run was not resumed.",
+        state: swarmStore.getState(),
+      };
+    }
+    if (state.running) {
+      const requestId = enqueueControlRequest(input);
+      return {
+        ok: true,
+        queued: true,
+        requestId,
+        message: "Resume requested. It will apply on the active runner.",
+        state,
+      };
+    }
+    return {
+      ok: false,
+      queued: false,
+      message: "No paused run is available to resume.",
+      state,
+    };
+  }
+
+  const requestedRound = Number(input.round);
+  if (!Number.isFinite(requestedRound)) {
+    return {
+      ok: false,
+      queued: false,
+      message: "A valid rewind round is required.",
+      state,
+    };
+  }
+
+  const normalizedRound = Math.max(1, Math.floor(requestedRound));
+  if (state.running && !state.features.checkpointing) {
+    return {
+      ok: false,
+      queued: false,
+      message: "Checkpointing is disabled for this run.",
+      state,
+    };
+  }
+  if (localRunActive || !state.running) {
+    try {
+      const rewind = await rewindSwarmToRound(normalizedRound);
+      return {
+        ok: true,
+        queued: false,
+        message: `Rewound to round ${normalizedRound}.`,
+        state: swarmStore.getState(),
+        rewind,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        queued: false,
+        message: error instanceof Error ? error.message : String(error),
+        state: swarmStore.getState(),
+      };
+    }
+  }
+
+  if (!state.paused) {
+    return {
+      ok: false,
+      queued: false,
+      message: "Pause the run before requesting rewind.",
+      state,
+    };
+  }
+
+  const requestId = enqueueControlRequest({
+    action: input.action,
+    reason: input.reason,
+    round: normalizedRound,
+    source: input.source,
+  });
+  return {
+    ok: true,
+    queued: true,
+    requestId,
+    message: `Rewind to round ${normalizedRound} requested.`,
+    state,
+  };
 }
 
 export function startSwarmRun(options: StartOptions = {}): StartResult {

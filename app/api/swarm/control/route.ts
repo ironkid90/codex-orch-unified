@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { pauseSwarmRun, resumeSwarmRun, rewindSwarmToRound } from "@/lib/swarm/engine";
-import { swarmStore } from "@/lib/swarm/store";
+import { requestSwarmControl } from "@/lib/swarm/engine";
 
 export const dynamic = "force-dynamic";
 
@@ -25,38 +24,21 @@ export async function POST(request: Request) {
   }
 
   try {
-    if (action === "pause") {
-      const ok = pauseSwarmRun(payload.reason);
-      return NextResponse.json({
-        ok,
-        action,
-        state: swarmStore.getState(),
-        message: ok ? "Run paused." : "Run was not paused.",
-      });
-    }
-
-    if (action === "resume") {
-      const ok = resumeSwarmRun();
-      return NextResponse.json({
-        ok,
-        action,
-        state: swarmStore.getState(),
-        message: ok ? "Run resumed." : "Run was not resumed.",
-      });
-    }
-
-    const round = Math.max(1, Math.floor(Number(payload.round)));
-    if (!Number.isFinite(round)) {
-      return NextResponse.json({ error: "A valid rewind round is required." }, { status: 400 });
-    }
-
-    const result = await rewindSwarmToRound(round);
-    return NextResponse.json({
-      ok: true,
+    const result = await requestSwarmControl({
       action,
-      rewind: result,
-      state: swarmStore.getState(),
+      reason: payload.reason,
+      round: payload.round,
+      source: "api",
     });
+    return NextResponse.json({
+      ok: result.ok,
+      queued: result.queued,
+      action,
+      requestId: result.requestId,
+      message: result.message,
+      rewind: result.rewind,
+      state: result.state,
+    }, { status: result.ok ? (result.queued ? 202 : 200) : 400 });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : String(error) },

@@ -7,6 +7,7 @@ import readline from "node:readline";
 import {
   getActiveRunPromise,
   pauseSwarmRun,
+  requestSwarmControl,
   resumeSwarmRun,
   rewindSwarmToRound,
   startSwarmRun,
@@ -220,6 +221,11 @@ function printUsage(): void {
   console.log("      [--no-lintLoop --no-ensembleVoting --no-researchAgent --no-contextCompression]");
   console.log("      [--no-heuristicSelector --no-checkpointing --no-humanInLoop --no-approveNextActionGate]");
   console.log("      [--non-interactive]");
+  console.log("  status                      Show the latest persisted swarm state");
+  console.log("  pause [--reason TEXT]       Pause the active swarm runner");
+  console.log("  resume                      Resume the active swarm runner");
+  console.log("  rewind <round>              Rewind to a checkpoint (run must be paused)");
+  console.log("      [--round N]");
   console.log("  deploy [--path PATH]        One-click Vercel preview deploy");
   console.log("      [--prod]");
 }
@@ -436,6 +442,52 @@ function printStateSummary(): void {
   );
 }
 
+async function statusCommand(): Promise<void> {
+  const state = swarmStore.getState();
+  printStateSummary();
+  console.log(`runId: ${state.runId ?? "—"}`);
+  console.log(`workspace: ${state.workspace || "—"}`);
+  console.log(`mode: ${state.mode}`);
+  console.log(`maxRounds: ${state.maxRounds}`);
+  if (state.pauseReason) {
+    console.log(`pauseReason: ${state.pauseReason}`);
+  }
+  const latest = state.rounds.at(-1);
+  if (latest) {
+    console.log(`latestRound: ${latest.round}`);
+    console.log(`latestDecision: ${latest.status}`);
+  }
+}
+
+async function controlCommand(
+  action: "pause" | "resume" | "rewind",
+  flags: Map<string, string | boolean>,
+  positionals: string[],
+): Promise<void> {
+  const requestedRound =
+    action === "rewind"
+      ? Number(flagString(flags, "round", positionals[0] || ""))
+      : undefined;
+  const result = await requestSwarmControl({
+    action,
+    reason: action === "pause" ? flagString(flags, "reason", "Paused from CLI.") : undefined,
+    round: requestedRound,
+    source: "cli",
+  });
+
+  console.log(result.message);
+  if (result.requestId) {
+    console.log(`requestId: ${result.requestId}`);
+  }
+  if (result.rewind) {
+    console.log(`rewind: round=${result.rewind.round} restored=${result.rewind.restoredCount}`);
+  }
+  printStateSummary();
+  if (!result.ok) {
+    process.exitCode = 1;
+  }
+}
+
 async function runCommandInteractive(flags: Map<string, string | boolean>): Promise<void> {
   const mode = (flagString(flags, "mode", "local") as RunMode) || "local";
   const maxRounds = flagNumber(flags, "max-rounds", 3);
@@ -580,6 +632,14 @@ async function main(): Promise<void> {
   }
   if (command === "run") {
     await runCommandInteractive(flags);
+    return;
+  }
+  if (command === "status") {
+    await statusCommand();
+    return;
+  }
+  if (command === "pause" || command === "resume" || command === "rewind") {
+    await controlCommand(command, flags, positionals);
     return;
   }
   if (command === "deploy") {

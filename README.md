@@ -1,140 +1,106 @@
 # Codex Swarm Orchestrator + Live Dashboard
 
-This repository now includes a real-time swarm dashboard with:
+This repository is a Codex-centric multi-agent orchestrator with two runtime tracks:
 
-- Fan-out/fan-in execution loop:
-- `Research` + `Worker-1` + `Evaluator` run each round.
-- `Worker-2` (Auditor) runs conditionally via heuristic selector.
-- `Coordinator` can run in 3-variant ensemble voting mode.
-- Evaluator feedback and research context are injected into the next round.
-- Live status streaming:
-- SSE stream at `api/swarm/stream`.
-- Snapshot API at `api/swarm/state`.
-- Start API at `api/swarm/start`.
-- Control API at `api/swarm/control` for pause/resume/rewind.
-- MGX-style operations UI:
-- Agent cards with phase + excerpts.
-- Round decision panel.
-- Activity timeline + structured agent messages.
-- Checkpoints, lint results, and ensemble outcomes.
-- Unified CLI for setup, run, and deploy flows.
+- Primary runtime: the local swarm in `lib/swarm/engine.ts`
+- Optional sidecar: the separate Foundry workflow in `foundry_agents/workflow_server.py`
 
-## Recent Architectural Improvements
+The primary swarm currently provides:
 
-- **Graph DSL Workflow Engine**: Moved from a hardcoded fan-out/fan-in loop to a dynamic node-and-edge workflow graph built with a new DSL (domain-specific language) in `lib/swarm/graph-dsl.ts`.
-- **Run History Persistence**: Tracks local and batch runs spanning multiple rounds with agent usage metrics written to immutable logs in `runs/history/`.
-- **Dynamic Provider Routing**: Decouples roles from hardcoded models. Uses heuristic thresholds and a multi-level fallback chain resolving via `config/model-routing.json` to intelligently route tasks per capability.
-- **Robust Test Infrastructure**: Replaced older scripts with a robust unified `vitest` infrastructure covering orchestration, parsing, and DSL validations, enforced via comprehensive `.github/workflows/ci.yml` CI/CD actions.
-- **OpenTelemetry Observability**: Spans and traces instrumenting agent PDA loops directly in `lib/swarm/engine.ts`.
+- A fixed fan-out/fan-in orchestration loop for `research`, `worker1`, `worker2`, `evaluator`, and `coordinator`
+- A Next.js dashboard in `app/page.tsx`
+- API control endpoints in `app/api/swarm/*`
+- A terminal control surface in `scripts/swarm-cli.ts`
+- File-backed runtime state in `runs/_runtime/current-state.json`
+- File-backed pause/resume/rewind requests in `runs/_runtime/control-queue`
+- Checkpoints and round artifacts under `runs/`
+- Provider/model routing from `config/model-routing.json`
 
-## Architecture
+## Current Runtime Status
 
-- `run-swarm.ps1` remains available.
-- New runtime lives in `lib/swarm/engine.ts`. (Wired to the Graph DSL executor).
-- Parsing/verification utilities:
-- `lib/swarm/parse.ts` for status/decision extraction.
-- `lib/swarm/verifier.ts` for deterministic safety checks.
-- `runs/round-*/messages.jsonl` for structured inter-agent communication.
-- UI + APIs:
-- `app/page.tsx`
-- `app/api/swarm/*`
+What is implemented now:
 
-## Deployment (From Scratch) & Local Setup
+- The real runtime is the fixed orchestrator in `lib/swarm/engine.ts`
+- Dashboard and CLI now read the same persisted swarm state
+- Pause, resume, and rewind can be requested from either the API or CLI
+- Rewind remains bounded to `CHECKPOINT_TARGETS` in `lib/swarm/engine.ts`
+
+What is not implemented yet:
+
+- No graph DSL executor is wired into the active runtime
+- No durable multi-user job queue or remote worker pool
+- No full CI/test hardening for the orchestration layer yet
+
+## Quick Start
 
 ### Prerequisites
 
-- Node.js >= 20.0 (Recommend `nvm` or `fnm`)
-- Python >= 3.10
+- Node.js 20+
+- Python 3.10+
 - Git
+- Codex CLI in `PATH` for `local` mode
 
-### 1. Clone & Bootstrap
-
-```bash
-git clone <your-repo-url> codex-orch
-cd codex-orch
-```
-
-### 2. Environment Configuration
-
-```bash
-cp .env.example .env.local
-```
-
-Add your respective API keys to `.env.local` (e.g., `OPENAI_API_KEY`, `GEMINI_API_KEY`) and toggle any capabilities (like `SWARM_WEB_SEARCH=1`).
-
-### 3. Install Dependencies & Build
-
-Our `package.json` relies on a centralized boostrap script to simultaneously prep both the monolithic Node environment and the Python `.venv` environment for the Agent Framework wrapper.
+### 1. Install and bootstrap
 
 ```bash
 npm install
 npm run bootstrap
-npm run build:all
-```
-
-### 4. Interactive Execution
-
-**To run the GUI (Next.js Dashboard) + Agent Server in parallel:**
-
-```bash
-npm run dev:all
-```
-
-Open [http://localhost:3000](http://localhost:3000) and click **Start swarm**.
-
-**To run via CLI only:**
-
-```bash
-npm run swarm:run -- --mode local --max-rounds 3
-```
-
-### 5. Multi-Runtime Docker Deployment
-
-If deploying to a pristine environment without local tooling, leverage the multi-stage Docker deployment:
-
-```bash
-docker-compose up --build -d
-```
-
-This orchestrates the Node dashboard, backend APIs, Python foundry service, and tracer services autonomously.
-
-## Unified Commands (GUI + CLI + Agent)
-
-- Health check:
-
-```bash
 npm run doctor
 ```
 
-- Compile all stacks:
+`bootstrap` also creates `.env.local` from `.env.example` when needed and installs the Python sidecar dependencies into `.venv`.
+
+### 2. Configure `.env.local`
+
+At minimum, configure the providers you want the swarm to use. Typical options:
+
+- `OPENAI_API_KEY`
+- `GEMINI_API_KEY`
+- `SWARM_RESEARCH_PROVIDER=gemini`
+- `SWARM_CODEX_BIN=codex`
+- `SWARM_WEB_SEARCH=1`
+
+### 3. Start the primary swarm UI
 
 ```bash
-npm run build:all
+npm run dev
 ```
 
-- GUI only (Next.js):
+Open `http://localhost:3000` and click **Start Swarm**. The dashboard starts and controls the local swarm runtime directly; the Foundry sidecar is not required for this path.
 
-```bash
-npm run dev:gui
-```
-
-- Agent server only (Foundry workflow):
-
-```bash
-npm run dev:agent
-```
-
-- GUI + agent server together:
-
-```bash
-npm run dev:all
-```
-
-- Swarm CLI:
+### 4. Run from terminal instead
 
 ```bash
 npm run swarm:run -- --mode local --max-rounds 3
 ```
+
+### 5. Observe and control the active run
+
+```bash
+npm run swarm:status
+npm run swarm:pause
+npm run swarm:resume
+npm run swarm:rewind -- --round 2
+```
+
+PowerShell entrypoint equivalents:
+
+```powershell
+.\run-swarm.ps1
+.\run-swarm.ps1 -Status
+.\run-swarm.ps1 -Pause -Reason "Review current round"
+.\run-swarm.ps1 -Resume
+.\run-swarm.ps1 -RewindRound 2
+```
+
+## Runtime Surfaces
+
+- Dashboard only: `npm run dev`
+- CLI only: `npm run swarm:run -- --mode local --max-rounds 3`
+- Optional Foundry sidecar only: `npm run dev:foundry`
+- Dashboard + Foundry sidecar: `npm run dev:all`
+
+The Foundry path is optional and does not power the primary Codex swarm loop.
 
 ## Multi-Model Router + Role Optimizer
 
@@ -193,6 +159,10 @@ The same runtime features are available from terminal:
 ```bash
 npm run swarm:setup
 npm run swarm:run -- --mode local --max-rounds 3
+npm run swarm:status
+npm run swarm:pause
+npm run swarm:resume
+npm run swarm:rewind -- --round 2
 ```
 
 Or via PowerShell entrypoint:
@@ -200,6 +170,10 @@ Or via PowerShell entrypoint:
 ```powershell
 .\run-swarm.ps1              # advanced CLI mode
 .\run-swarm.ps1 -Setup       # auth/API setup
+.\\run-swarm.ps1 -Status      # current persisted state
+.\\run-swarm.ps1 -Pause       # pause active run
+.\\run-swarm.ps1 -Resume      # resume active run
+.\\run-swarm.ps1 -RewindRound 2
 .\run-swarm.ps1 -Deploy      # one-click Vercel preview deploy
 .\run-swarm.ps1 -Legacy      # old direct script path
 ```
