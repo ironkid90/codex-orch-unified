@@ -2425,18 +2425,31 @@ async function runCoordinatorEnsemble(
         if (mode === "demo") {
           await writeFile(variantOut, demoOutput("coordinator", round), "utf8");
         } else {
-          tokenUsage = await runProviderTask({
-            agentId: "coordinator",
-            round,
-            prompt: `${prompt}${variant.suffix}`,
-            outFile: variantOut,
-            workspace,
-            mode,
-            roundDir,
-            target: "broadcast",
-            logPrefix: `coordinator:${variant.id}`,
-            execution,
-          });
+          tokenUsage = await runWithStallTimeout(
+            runProviderTask({
+              agentId: "coordinator",
+              round,
+              prompt: `${prompt}${variant.suffix}`,
+              outFile: variantOut,
+              workspace,
+              mode,
+              roundDir,
+              target: "broadcast",
+              logPrefix: `coordinator:${variant.id}`,
+              execution,
+            }),
+            STALL_TIMEOUT_MS,
+            () => {
+              swarmStore.appendEvent({
+                type: "agent.stalled",
+                round,
+                agentId: "coordinator",
+                level: "warn",
+                message: `coordinator:${variant.id} stalled after ${STALL_TIMEOUT_MS}ms with no output; aborting.`,
+                metadata: { stallTimeoutMs: STALL_TIMEOUT_MS, variant: variant.id },
+              });
+            },
+          );
         }
         const text = await readFile(variantOut, "utf8");
         for (const issue of verifyOutputSafety(text)) {
