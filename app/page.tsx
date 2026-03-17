@@ -278,7 +278,7 @@ export default function HomePage() {
   const latestCheckpointRound = state?.checkpoints.at(-1)?.round;
   const agents = state ? Object.values(state.agents) : [];
   const pendingControls = state?.pendingControls ?? [];
-  const latestPendingControl = pendingControls[0];
+  const latestPendingControl = pendingControls.at(-1);
   const pendingPause = pendingControls.find((control) => control.action === "pause");
   const activeStep = state?.activity.activeStep;
   const activeGate = state?.activity.activeGate;
