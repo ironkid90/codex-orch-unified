@@ -18,6 +18,7 @@ import {
   type SwarmRunState,
   createAgentDefaults,
 } from "./types";
+import { loadPersistedRuntimeState, persistRuntimeState } from "./runtime-state";
 
 const MAX_EVENTS = 500;
 
@@ -54,7 +55,12 @@ class SwarmStore {
   private state = createInitialState();
   private eventCounter = 0;
 
+  constructor() {
+    this.hydrateFromDisk();
+  }
+
   getState(): SwarmRunState {
+    this.hydrateFromDisk();
     return cloneState(this.state);
   }
 
@@ -69,6 +75,7 @@ class SwarmStore {
     mode: RunMode;
     features?: Partial<SwarmFeatures>;
   }): string {
+    this.hydrateFromDisk();
     if (this.state.running) {
       throw new Error("A swarm run is already in progress.");
     }
@@ -144,6 +151,7 @@ class SwarmStore {
   setPaused(paused: boolean, reason?: string): void {
     this.state.paused = paused;
     this.state.pauseReason = paused ? reason || "Paused by operator." : undefined;
+    this.persistSnapshot();
     this.appendEvent({
       type: paused ? "run.paused" : "run.resumed",
       round: this.state.currentRound,
@@ -154,6 +162,7 @@ class SwarmStore {
 
   setCurrentRound(round: number): void {
     this.state.currentRound = round;
+    this.persistSnapshot();
   }
 
   setAgentState(
@@ -161,42 +170,51 @@ class SwarmStore {
     patch: Partial<SwarmRunState["agents"][AgentId]>,
   ): void {
     this.state.agents[agentId] = { ...this.state.agents[agentId], ...patch };
+    this.persistSnapshot();
   }
 
   upsertRound(summary: RoundSummary): void {
     const existing = this.state.rounds.findIndex((item) => item.round === summary.round);
     if (existing >= 0) {
       this.state.rounds[existing] = summary;
+      this.persistSnapshot();
       return;
     }
     this.state.rounds.push(summary);
+    this.persistSnapshot();
   }
 
   upsertLintResult(result: LintResult): void {
     const existing = this.state.lintResults.findIndex((item) => item.round === result.round);
     if (existing >= 0) {
       this.state.lintResults[existing] = result;
+      this.persistSnapshot();
       return;
     }
     this.state.lintResults.push(result);
+    this.persistSnapshot();
   }
 
   upsertEnsembleResult(result: EnsembleResult): void {
     const existing = this.state.ensembles.findIndex((item) => item.round === result.round);
     if (existing >= 0) {
       this.state.ensembles[existing] = result;
+      this.persistSnapshot();
       return;
     }
     this.state.ensembles.push(result);
+    this.persistSnapshot();
   }
 
   upsertCheckpoint(checkpoint: CheckpointInfo): void {
     const existing = this.state.checkpoints.findIndex((item) => item.round === checkpoint.round);
     if (existing >= 0) {
       this.state.checkpoints[existing] = checkpoint;
+      this.persistSnapshot();
       return;
     }
     this.state.checkpoints.push(checkpoint);
+    this.persistSnapshot();
   }
 
   appendMessage(message: AgentMessage): void {
@@ -204,10 +222,12 @@ class SwarmStore {
     if (this.state.messages.length > MAX_EVENTS * 2) {
       this.state.messages = this.state.messages.slice(-MAX_EVENTS * 2);
     }
+    this.persistSnapshot();
   }
 
   setIoCoordinator(snapshot: IoCoordinatorSnapshot): void {
     this.state.ioCoordinator = snapshot;
+    this.persistSnapshot();
     if (this.state.running && this.state.runId) {
       this.emitTransientStateUpdate("io.updated");
     }
@@ -229,6 +249,7 @@ class SwarmStore {
       this.state.events = this.state.events.slice(-MAX_EVENTS);
     }
 
+    this.persistSnapshot();
     this.emitter.emit("event", event);
     return event;
   }
@@ -247,6 +268,20 @@ class SwarmStore {
       message: "",
     };
     this.emitter.emit("event", event);
+  }
+
+  private hydrateFromDisk(): void {
+    const persisted = loadPersistedRuntimeState();
+    if (!persisted) {
+      return;
+    }
+    this.state = persisted.state;
+    const maxEventId = this.state.events.reduce((highest, event) => Math.max(highest, event.id), 0);
+    this.eventCounter = Math.max(this.eventCounter, maxEventId);
+  }
+
+  private persistSnapshot(): void {
+    persistRuntimeState(this.state);
   }
 }
 

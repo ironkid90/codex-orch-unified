@@ -1,0 +1,33 @@
+{
+  "timestamp": "2026-03-17T02:00:38+03:00",
+  "workspace": "C:\\Users\\Gabi\\gencode\\codex-orch-unified",
+  "objective": "Phase 2 provider compatibility hardening for ChatGPT/Codex-session auth, OpenAI-compatible gateways, Gemini, and Vertex AI.",
+  "changes": [
+    "Updated lib/providers/auth.ts so Vertex-mode model overrides win over the default VERTEX_AI_MODEL when role routing selects a specific Gemini model.",
+    "Updated lib/providers/factory.ts to detect OpenAI-compatible auth through API keys, bearer tokens, AI Gateway tokens, and local Codex session import, and to avoid misclassifying gateway setups as plain API-key OpenAI.",
+    "Updated lib/swarm/model-routing.ts so SWARM_RESEARCH_PROVIDER can force the research role to openai, gemini, or vertex even when config/model-routing.json exists.",
+    "Updated scripts/swarm-cli.ts setup flow to configure research routing explicitly for openai, gemini, or vertex, including OPENAI_RESEARCH_MODEL and Gemini auth-mode prompts.",
+    "Removed stale dead helpers from lib/swarm/engine.ts after the provider/auth refactor.",
+    "Updated .env.example and README.md to document OPENAI_RESEARCH_MODEL, research-provider overrides, OpenAI research mode, Vertex mode, and corrected PowerShell examples."
+  ],
+  "verification": {
+    "attempted": [
+      "cmd.exe /d /c npm run typecheck",
+      "cmd.exe /d /c npm run doctor",
+      "cmd.exe /d /c npm run swarm:status",
+      "js_repl TypeScript API compile check"
+    ],
+    "result": "Not executable from this tool environment. External processes failed to start, and js_repl crashed at Node initialization before the TypeScript check could run."
+  },
+  "outcomes": [
+    "Research-provider env changes now have a reliable runtime effect.",
+    "OpenAI-compatible auth/status detection now matches the runtime auth resolver much more closely.",
+    "Vertex AI model routing can now honor per-role model overrides instead of silently collapsing to one default model."
+  ],
+  "next_steps": [
+    "Run npm run typecheck locally.",
+    "Run npm run doctor locally.",
+    "Use npm run swarm:setup to exercise openai, gemini, and vertex configuration paths.",
+    "Run npm run dev and test at least one real OpenAI-compatible run and one Vertex-backed research run."
+  ]
+}

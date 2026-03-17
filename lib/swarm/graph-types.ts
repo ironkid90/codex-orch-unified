@@ -51,18 +51,33 @@ export type GraphNode = z.infer<typeof GraphNodeSchema>;
 
 // ─── Edge Definition ─────────────────────────────────────────────────────────
 
-export const GraphEdgeSchema = z.object({
-  id: z.string().min(1),
-  from: z.string().min(1),
-  to: z.string().min(1),
-  type: GraphEdgeTypeSchema,
-  /** Condition expression for conditional edges */
-  condition: z.string().optional(),
-  priority: z.number().int().optional(),
+const BaseGraphEdgeFields = {
+  id: z.string(),
+  from: z.string(),
+  to: z.string(),
   label: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
+};
+
+const ConditionalGraphEdgeSchema = z.object({
+  ...BaseGraphEdgeFields,
+  type: z.literal("conditional"),
+  /** Condition expression for conditional edges (required for conditional type) */
+  condition: z.string(),
 });
 
+const NonConditionalGraphEdgeBaseSchema = z.object({
+  ...BaseGraphEdgeFields,
+  /** Optional condition-like metadata for non-conditional edge types */
+  condition: z.string().optional(),
+});
+
+export const GraphEdgeSchema = z.discriminatedUnion("type", [
+  ConditionalGraphEdgeSchema,
+  NonConditionalGraphEdgeBaseSchema.extend({ type: z.literal("sequential") }),
+  NonConditionalGraphEdgeBaseSchema.extend({ type: z.literal("parallel") }),
+  NonConditionalGraphEdgeBaseSchema.extend({ type: z.literal("fallback") }),
+]);
 export type GraphEdge = z.infer<typeof GraphEdgeSchema>;
 
 // ─── Workflow Graph ───────────────────────────────────────────────────────────

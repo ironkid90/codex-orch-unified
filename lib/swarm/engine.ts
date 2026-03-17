@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import OpenAI from "openai";
+import { resolveGeminiAuth, resolveOpenAIAuth, resolveOpenAIBaseUrl } from "../providers/auth";
 import { IOCoordinator } from "./io-coordinator";
 import { createProvider } from "../providers/factory";
 import type {
@@ -22,8 +23,9 @@ import type {
   ToolCall as ProviderToolCall,
   ToolDefinition as ProviderToolDefinition,
 } from "../providers/types";
-import { createDefaultToolRegistry, executeToolCall } from "../tools";
+import { createDefaultToolRegistry, executeToolCall, type ToolRegistry } from "../tools";
 import type { ToolContext as AgentToolContext } from "../tools";
+import { McpClientManager, createMcpToolWrappers } from "./mcp-client";
 
 import {
   compressForContext,
@@ -41,6 +43,12 @@ import {
   type ProviderId,
   type RoleExecutionPreference,
 } from "./model-routing";
+import {
+  completeControlRequest,
+  enqueueControlRequest,
+  readQueuedControlRequests,
+  type ControlAction,
+} from "./runtime-state";
 import { swarmStore } from "./store";
 import { AGENT_IDS } from "./types";
 import type {
@@ -51,6 +59,7 @@ import type {
   RoundStatus,
   RunMode,
   SwarmFeatures,
+  SwarmRunState,
 } from "./types";
 import { verifyOutputSafety } from "./verifier";
 // ---- Symphony integration: token accounting + workspace safety ----
@@ -72,7 +81,8 @@ const MESSAGE_FILE = "messages.jsonl";
 const MAX_ALLOWED_ROUNDS = 8;
 const DEFAULT_TOOL_MAX_STEPS = 6;
 const DEFAULT_PROVIDER_MAX_OUTPUT_TOKENS = 2200;
-const defaultToolRegistry = createDefaultToolRegistry();
+let defaultToolRegistry: ToolRegistry = createDefaultToolRegistry();
+let activeMcpClientManager: McpClientManager | null = null;
 
 // ---- Symphony integration: stall detection + token tracking singletons ----
 const STALL_TIMEOUT_MS =
@@ -104,6 +114,65 @@ const CHECKPOINT_TARGETS = [
 
 let activeRunPromise: Promise<void> | null = null;
 
+async function configureRunToolRegistry(workspace: string): Promise<void> {
+  defaultToolRegistry = createDefaultToolRegistry();
+
+  if (activeMcpClientManager) {
+    await activeMcpClientManager.closeAll().catch((error) => {
+      console.error("Failed to close previous MCP servers:", error);
+    });
+    activeMcpClientManager = null;
+  }
+
+  try {
+    const manager = new McpClientManager();
+    const settings = await manager.loadSettings(workspace);
+    if (!settings) {
+      return;
+    }
+
+    await manager.initializeServers(settings, workspace);
+    const wrappedTools = createMcpToolWrappers(manager);
+    for (const tool of wrappedTools) {
+      defaultToolRegistry.set(tool.name, tool);
+    }
+
+    activeMcpClientManager = manager;
+
+    if (wrappedTools.length > 0) {
+      swarmStore.appendEvent({
+        type: "context.mcp_tools",
+        round: 0,
+        message: `Loaded ${wrappedTools.length} MCP tools from ${manager.getServers().length} connected servers.`,
+        metadata: {
+          serverNames: manager.getServers().map((server) => server.serverName),
+          toolNames: wrappedTools.map((tool) => tool.name),
+        },
+      });
+    }
+  } catch (error) {
+    console.error("Failed to configure MCP-backed tool registry:", error);
+    swarmStore.appendEvent({
+      type: "context.mcp_tools",
+      round: 0,
+      level: "warn",
+      message: `MCP tool initialization failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    defaultToolRegistry = createDefaultToolRegistry();
+    activeMcpClientManager = null;
+  }
+}
+
+async function teardownRunToolRegistry(): Promise<void> {
+  if (activeMcpClientManager) {
+    await activeMcpClientManager.closeAll().catch((error) => {
+      console.error("Failed to close MCP servers:", error);
+    });
+  }
+  activeMcpClientManager = null;
+  defaultToolRegistry = createDefaultToolRegistry();
+}
+
 interface StartOptions {
   maxRounds?: number;
   workspace?: string;
@@ -115,6 +184,15 @@ interface StartResult {
   runId: string;
   mode: RunMode;
   features: SwarmFeatures;
+}
+
+interface ControlRequestResult {
+  ok: boolean;
+  queued: boolean;
+  message: string;
+  state: SwarmRunState;
+  requestId?: string;
+  rewind?: { round: number; restoredCount: number };
 }
 
 interface AgentTask {
@@ -167,6 +245,11 @@ interface GeminiResearchConfig {
   oauthToken?: string;
   useAdc: boolean;
   baseUrl: string;
+  useVertexAi?: boolean;
+  vertexProject?: string;
+  vertexLocation?: string;
+  vertexBaseUrl?: string;
+  vertexModel?: string;
 }
 
 type WebSearchProvider = "bing" | "tavily";
@@ -281,6 +364,107 @@ function emitAgentLog(
   });
 }
 
+function describeControlSource(source?: string): string {
+  return source ? `from ${source}` : "from the external control plane";
+}
+
+async function processQueuedControlRequests(round: number): Promise<void> {
+  const queuedRequests = readQueuedControlRequests();
+  for (const request of queuedRequests) {
+    try {
+      const sourceLabel = describeControlSource(request.source);
+      if (request.action === "pause") {
+        const ok = pauseSwarmRun(request.reason || `Pause requested ${sourceLabel}.`);
+        const message = ok
+          ? `Pause applied ${sourceLabel}.`
+          : "Pause request ignored because the run is already paused or human-in-the-loop is disabled.";
+        completeControlRequest(request, {
+          ok,
+          message,
+          metadata: { round, action: request.action, source: request.source },
+        });
+        if (ok) {
+          swarmStore.appendEvent({
+            type: "run.control",
+            round,
+            level: "warn",
+            message,
+            metadata: { action: request.action, source: request.source, requestId: request.id },
+          });
+        }
+        continue;
+      }
+
+      if (request.action === "resume") {
+        const ok = resumeSwarmRun();
+        const message = ok ? `Resume applied ${sourceLabel}.` : "Resume request ignored because the run is not paused.";
+        completeControlRequest(request, {
+          ok,
+          message,
+          metadata: { round, action: request.action, source: request.source },
+        });
+        if (ok) {
+          swarmStore.appendEvent({
+            type: "run.control",
+            round,
+            message,
+            metadata: { action: request.action, source: request.source, requestId: request.id },
+          });
+        }
+        continue;
+      }
+
+      const requestedRound = Number(request.round);
+      if (!Number.isFinite(requestedRound)) {
+        throw new Error("A valid rewind round is required.");
+      }
+      const rewind = await rewindSwarmToRound(Math.max(1, Math.floor(requestedRound)));
+      const message = `Rewind to round ${rewind.round} applied ${sourceLabel}.`;
+      completeControlRequest(request, {
+        ok: true,
+        message,
+        metadata: {
+          round,
+          action: request.action,
+          source: request.source,
+          restoredCount: rewind.restoredCount,
+          targetRound: rewind.round,
+        },
+      });
+      swarmStore.appendEvent({
+        type: "run.control",
+        round,
+        level: "warn",
+        message,
+        metadata: {
+          action: request.action,
+          source: request.source,
+          requestId: request.id,
+          restoredCount: rewind.restoredCount,
+          targetRound: rewind.round,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      completeControlRequest(request, {
+        ok: false,
+        message,
+        metadata: { round, action: request.action, source: request.source },
+      });
+      const state = swarmStore.getState();
+      if (state.runId) {
+        swarmStore.appendEvent({
+          type: "run.control",
+          round,
+          level: "warn",
+          message: `Control request ${request.action} rejected: ${message}`,
+          metadata: { action: request.action, source: request.source, requestId: request.id },
+        });
+      }
+    }
+  }
+}
+
 async function runProcess(
   command: string,
   args: string[],
@@ -336,20 +520,58 @@ function setPda(agentId: AgentId, round: number, stage: "perceive" | "decide" | 
   });
 }
 
-function getGeminiConfig(): GeminiResearchConfig {
-  const providerEnabled = (process.env.SWARM_RESEARCH_PROVIDER || "").toLowerCase() === "gemini";
-  const model = process.env.GEMINI_MODEL || "gemini-3-pro";
-  const apiKey = process.env.GEMINI_API_KEY || undefined;
-  const oauthToken = process.env.GOOGLE_OAUTH_ACCESS_TOKEN || undefined;
-  const useAdc = process.env.GOOGLE_USE_ADC === "1";
-  const baseUrl = process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta";
+async function getGeminiConfig(modelOverride?: string, workspace?: string): Promise<GeminiResearchConfig> {
+  const resolved = await resolveGeminiAuth({
+    modelOverride,
+    workspace,
+  });
   return {
-    providerEnabled,
-    model,
-    apiKey,
-    oauthToken,
-    useAdc,
-    baseUrl,
+    providerEnabled: resolved.providerEnabled,
+    model: resolved.model,
+    apiKey: resolved.apiKey,
+    oauthToken: resolved.oauthToken,
+    useAdc: resolved.useAdc,
+    baseUrl: resolved.baseUrl,
+    useVertexAi: resolved.useVertexAi,
+    vertexProject: resolved.vertexProject,
+    vertexLocation: resolved.vertexLocation,
+    vertexBaseUrl: resolved.vertexBaseUrl,
+    vertexModel: resolved.vertexModel,
+  };
+}
+
+async function runVertexOpenAICompatiblePrompt(input: {
+  prompt: string;
+  model: string;
+  baseUrl: string;
+  bearerToken: string;
+  maxOutputTokens: number;
+  operationName: string;
+}): Promise<{ text: string; usage: TokenUsage }> {
+  const response = await IOCoordinator.executeWithResilience(
+    input.operationName,
+    () => fetch(`${input.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${input.bearerToken}`,
+      },
+      body: JSON.stringify({
+        model: input.model,
+        messages: [{ role: "user", content: input.prompt }],
+        max_tokens: input.maxOutputTokens,
+        temperature: 0.2,
+      }),
+    }),
+    { maxRetries: 3 },
+  );
+  if (!response.ok) {
+    throw new Error(`Vertex AI OpenAI-compatible request failed with ${response.status}`);
+  }
+  const payload = (await response.json()) as unknown;
+  return {
+    text: extractModelOutputText(payload) || "(empty response)",
+    usage: extractOpenAIUsage(payload),
   };
 }
 
@@ -836,21 +1058,6 @@ async function runExternalWebResearch(
   return ranked;
 }
 
-async function getGoogleAccessTokenFromAdc(workspace: string): Promise<string | null> {
-  try {
-    const result = await runProcess("gcloud", ["auth", "application-default", "print-access-token"], {
-      cwd: workspace,
-    });
-    if (result.exitCode !== 0) {
-      return null;
-    }
-    const token = result.stdout.trim();
-    return token || null;
-  } catch {
-    return null;
-  }
-}
-
 function extractGeminiText(payload: unknown): string {
   if (!payload || typeof payload !== "object") {
     return "";
@@ -942,7 +1149,7 @@ async function runGeminiResearch(
   localSignals: string[],
   modelOverride?: string,
 ): Promise<string | null> {
-  const cfg = getGeminiConfig();
+  const cfg = await getGeminiConfig(modelOverride, workspace);
   const model = modelOverride || cfg.model;
   if (!cfg.providerEnabled) {
     return null;
@@ -972,12 +1179,28 @@ async function runGeminiResearch(
     },
   };
 
-  let token: string | undefined = cfg.oauthToken;
-  if (!cfg.apiKey && !token && cfg.useAdc) {
-    token = (await getGoogleAccessTokenFromAdc(workspace)) || undefined;
-  }
+  const token = cfg.oauthToken;
   if (!cfg.apiKey && !token) {
     return null;
+  }
+
+  if (cfg.useVertexAi) {
+    if (!cfg.vertexBaseUrl || !cfg.vertexModel) {
+      throw new Error("Vertex AI Gemini research requires GOOGLE_CLOUD_PROJECT/LOCATION or VERTEX_AI_* configuration.");
+    }
+    if (!token) {
+      throw new Error("Vertex AI Gemini research requires Google OAuth/ADC credentials.");
+    }
+    const result = await runVertexOpenAICompatiblePrompt({
+      prompt,
+      model: cfg.vertexModel,
+      baseUrl: cfg.vertexBaseUrl,
+      bearerToken: token,
+      maxOutputTokens: 700,
+      operationName: "VertexGeminiResearchFetch",
+    });
+    tokenTracker.recordDelta(`research:round:${round}`, result.usage);
+    return result.text || null;
   }
 
   const endpoint = `${cfg.baseUrl}/models/${encodeURIComponent(model)}:generateContent`;
@@ -1020,14 +1243,13 @@ async function runOpenAIResearch(
     ...localSignals.slice(0, 20).map((line) => `- ${line}`),
   ].join("\n");
 
-  const apiKey = process.env.OPENAI_API_KEY || "";
-  const oauthToken = process.env.OPENAI_OAUTH_ACCESS_TOKEN || "";
+  const auth = await resolveOpenAIAuth();
   const maxOutputTokens = parseClampedInt(process.env.OPENAI_RESEARCH_MAX_OUTPUT_TOKENS, 700, 128, 2048);
 
-  if (apiKey) {
+  if (auth.apiKey) {
     const client = new OpenAI({
-      apiKey,
-      baseURL: process.env.OPENAI_BASE_URL || undefined,
+      apiKey: auth.apiKey,
+      baseURL: auth.baseUrl,
     });
     const response = await client.responses.create({
       model,
@@ -1039,16 +1261,15 @@ async function runOpenAIResearch(
     return extractModelOutputText(response) || null;
   }
 
-  if (!oauthToken) {
+  if (!auth.bearerToken) {
     return null;
   }
 
-  const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
-  const response = await fetch(`${baseUrl}/responses`, {
+  const response = await fetch(`${auth.baseUrl}/responses`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${oauthToken}`,
+      authorization: `Bearer ${auth.bearerToken}`,
     },
     body: JSON.stringify({
       model,
@@ -1066,6 +1287,7 @@ async function runOpenAIResearch(
 }
 async function waitIfPaused(round: number, gate: string): Promise<void> {
   for (; ;) {
+    await processQueuedControlRequests(round);
     const state = swarmStore.getState();
     if (!state.running) {
       throw new Error("Run no longer active.");
@@ -1129,77 +1351,25 @@ async function runCodexTask(task: AgentTask): Promise<TokenUsage> {
   return createTokenUsage();
 }
 
-async function runOpenAITask(task: AgentTask): Promise<TokenUsage> {
-  const model = task.execution?.model || process.env.OPENAI_SWARM_MODEL || "gpt-5.2";
-  const maxOutputTokens = parseClampedInt(process.env.OPENAI_SWARM_MAX_OUTPUT_TOKENS, 2200, 256, 8192);
-  const oauthToken = process.env.OPENAI_OAUTH_ACCESS_TOKEN || "";
-  const apiKey = process.env.OPENAI_API_KEY || "";
-
-  if (apiKey) {
-    const client = new OpenAI({
-      apiKey,
-      baseURL: process.env.OPENAI_BASE_URL || undefined,
-    });
-    const response = await IOCoordinator.executeWithResilience(
-      'OpenAITask',
-      () => client.responses.create({
-        model,
-        input: task.prompt,
-        max_output_tokens: maxOutputTokens,
-        temperature: 0.2,
-      }),
-      { maxRetries: 3 }
-    );
-    const text = extractModelOutputText(response) || "(empty response)";
-    await writeFile(task.outFile, text, "utf8");
-    return extractOpenAIUsage(response as unknown);
-  }
-
-  if (!oauthToken) {
-    throw new Error("OpenAI execution selected but neither OPENAI_API_KEY nor OPENAI_OAUTH_ACCESS_TOKEN is configured.");
-  }
-
-  const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
-  const response = await IOCoordinator.executeWithResilience(
-    'OpenAITaskFetch',
-    () => fetch(`${baseUrl}/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${oauthToken}`,
-      },
-      body: JSON.stringify({
-        model,
-        input: task.prompt,
-        max_output_tokens: maxOutputTokens,
-        temperature: 0.2,
-      }),
-    }),
-    { maxRetries: 3 }
-  );
-  if (!response.ok) {
-    throw new Error(`OpenAI OAuth request failed with ${response.status}`);
-  }
-  const json = (await response.json()) as unknown;
-  const text = extractModelOutputText(json) || "(empty response)";
-  await writeFile(task.outFile, text, "utf8");
-  return extractOpenAIUsage(json);
-}
-
-function getGeminiTaskConfig(modelOverride?: string): GeminiResearchConfig {
-  const cfg = getGeminiConfig();
+async function getGeminiTaskConfig(modelOverride?: string, workspace?: string): Promise<GeminiResearchConfig> {
+  const cfg = await getGeminiConfig(modelOverride, workspace);
   return {
     providerEnabled: true,
-    model: modelOverride || process.env.GEMINI_SWARM_MODEL || cfg.model || "gemini-3-pro-preview",
+    model: modelOverride || process.env.GEMINI_SWARM_MODEL || cfg.model || "gemini-2.5-flash",
     apiKey: process.env.GEMINI_API_KEY || cfg.apiKey,
     oauthToken: process.env.GOOGLE_OAUTH_ACCESS_TOKEN || cfg.oauthToken,
     useAdc: process.env.GOOGLE_USE_ADC === "1" || cfg.useAdc,
     baseUrl: process.env.GEMINI_BASE_URL || cfg.baseUrl,
+    useVertexAi: cfg.useVertexAi,
+    vertexProject: cfg.vertexProject,
+    vertexLocation: cfg.vertexLocation,
+    vertexBaseUrl: cfg.vertexBaseUrl,
+    vertexModel: cfg.vertexModel,
   };
 }
 
 async function runGeminiTask(task: AgentTask): Promise<TokenUsage> {
-  const cfg = getGeminiTaskConfig(task.execution?.model);
+  const cfg = await getGeminiTaskConfig(task.execution?.model, task.workspace);
   const body = {
     contents: [
       {
@@ -1213,14 +1383,30 @@ async function runGeminiTask(task: AgentTask): Promise<TokenUsage> {
     },
   };
 
-  let token: string | undefined = cfg.oauthToken;
-  if (!cfg.apiKey && !token && cfg.useAdc) {
-    token = (await getGoogleAccessTokenFromAdc(task.workspace)) || undefined;
-  }
+  const token = cfg.oauthToken;
   if (!cfg.apiKey && !token) {
     throw new Error(
       "Gemini execution selected but neither GEMINI_API_KEY nor Google OAuth/ADC credentials are configured.",
     );
+  }
+
+  if (cfg.useVertexAi) {
+    if (!cfg.vertexBaseUrl || !cfg.vertexModel) {
+      throw new Error("Vertex AI Gemini execution requires GOOGLE_CLOUD_PROJECT/LOCATION or VERTEX_AI_* configuration.");
+    }
+    if (!token) {
+      throw new Error("Vertex AI Gemini execution requires Google OAuth/ADC credentials.");
+    }
+    const result = await runVertexOpenAICompatiblePrompt({
+      prompt: task.prompt,
+      model: cfg.vertexModel,
+      baseUrl: cfg.vertexBaseUrl,
+      bearerToken: token,
+      maxOutputTokens: parseClampedInt(process.env.GEMINI_SWARM_MAX_OUTPUT_TOKENS, 2200, 256, 8192),
+      operationName: "VertexGeminiTaskFetch",
+    });
+    await writeFile(task.outFile, result.text, "utf8");
+    return result.usage;
   }
 
   const endpoint = `${cfg.baseUrl}/models/${encodeURIComponent(cfg.model)}:generateContent`;
@@ -1275,7 +1461,7 @@ function buildUnifiedProviderConfig(task: AgentTask, provider: Exclude<ProviderI
       type: "openai",
       model: modelOverride || process.env.OPENAI_SWARM_MODEL || process.env.OPENAI_MODEL || "gpt-4o",
       apiKey: process.env.OPENAI_API_KEY,
-      baseUrl: process.env.OPENAI_BASE_URL,
+      baseUrl: resolveOpenAIBaseUrl(process.env.OPENAI_BASE_URL),
       maxTokens,
       temperature: 0.2,
     };
@@ -1465,15 +1651,11 @@ async function runProviderTask(task: AgentTask): Promise<TokenUsage> {
     return runCodexTask(task);
   }
 
-  if (provider === "openai" && !process.env.OPENAI_API_KEY && process.env.OPENAI_OAUTH_ACCESS_TOKEN) {
-    return runOpenAITask(task);
-  }
-
-  if (provider === "gemini" && !process.env.GEMINI_API_KEY) {
+  if (provider === "gemini") {
     return runGeminiTask(task);
   }
 
-  if (provider === "openai" || provider === "gemini" || provider === "anthropic" || provider === "ollama") {
+  if (provider === "openai" || provider === "anthropic" || provider === "ollama") {
     return runUnifiedProviderTask(task, provider);
   }
 
@@ -2293,6 +2475,7 @@ function deriveRoundStatus(
 }
 async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunMode }): Promise<void> {
   await mkdir(RUNS_DIR, { recursive: true });
+  await configureRunToolRegistry(opts.workspace);
   let prevFeedback = "";
   let prevCoordinatorContext: CoordinatorContinuityContext | null = null;
   let carryW1Directives: string[] = [];
@@ -2326,6 +2509,7 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
   }
 
   for (let round = 1; round <= opts.maxRounds; round += 1) {
+    await processQueuedControlRequests(round);
     const features = swarmStore.getState().features;
     const roundTokenBaseline = tokenTracker.getAggregateTotals();
     await waitIfPaused(round, "round_start");
@@ -2657,6 +2841,150 @@ export async function rewindSwarmToRound(round: number): Promise<{ round: number
   return { round, restoredCount };
 }
 
+export async function requestSwarmControl(input: {
+  action: ControlAction;
+  reason?: string;
+  round?: number;
+  source?: string;
+}): Promise<ControlRequestResult> {
+  const state = swarmStore.getState();
+  const localRunActive = Boolean(activeRunPromise);
+
+  if (input.action === "pause") {
+    if (state.running && !state.features.humanInLoop) {
+      return {
+        ok: false,
+        queued: false,
+        message: "Pause/resume controls are disabled because human-in-the-loop is off.",
+        state,
+      };
+    }
+    if (localRunActive) {
+      const ok = pauseSwarmRun(input.reason);
+      return {
+        ok,
+        queued: false,
+        message: ok ? "Run paused." : "Run was not paused.",
+        state: swarmStore.getState(),
+      };
+    }
+    if (state.running) {
+      const requestId = enqueueControlRequest(input);
+      return {
+        ok: true,
+        queued: true,
+        requestId,
+        message: "Pause requested. It will apply after the current step finishes.",
+        state,
+      };
+    }
+    return {
+      ok: false,
+      queued: false,
+      message: "No active run to pause.",
+      state,
+    };
+  }
+
+  if (input.action === "resume") {
+    if (state.running && !state.paused) {
+      return {
+        ok: false,
+        queued: false,
+        message: "Run is not paused.",
+        state,
+      };
+    }
+    if (localRunActive) {
+      const ok = resumeSwarmRun();
+      return {
+        ok,
+        queued: false,
+        message: ok ? "Run resumed." : "Run was not resumed.",
+        state: swarmStore.getState(),
+      };
+    }
+    if (state.running) {
+      const requestId = enqueueControlRequest(input);
+      return {
+        ok: true,
+        queued: true,
+        requestId,
+        message: "Resume requested. It will apply on the active runner.",
+        state,
+      };
+    }
+    return {
+      ok: false,
+      queued: false,
+      message: "No paused run is available to resume.",
+      state,
+    };
+  }
+
+  const requestedRound = Number(input.round);
+  if (!Number.isFinite(requestedRound)) {
+    return {
+      ok: false,
+      queued: false,
+      message: "A valid rewind round is required.",
+      state,
+    };
+  }
+
+  const normalizedRound = Math.max(1, Math.floor(requestedRound));
+  if (state.running && !state.features.checkpointing) {
+    return {
+      ok: false,
+      queued: false,
+      message: "Checkpointing is disabled for this run.",
+      state,
+    };
+  }
+  if (localRunActive || !state.running) {
+    try {
+      const rewind = await rewindSwarmToRound(normalizedRound);
+      return {
+        ok: true,
+        queued: false,
+        message: `Rewound to round ${normalizedRound}.`,
+        state: swarmStore.getState(),
+        rewind,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        queued: false,
+        message: error instanceof Error ? error.message : String(error),
+        state: swarmStore.getState(),
+      };
+    }
+  }
+
+  if (!state.paused) {
+    return {
+      ok: false,
+      queued: false,
+      message: "Pause the run before requesting rewind.",
+      state,
+    };
+  }
+
+  const requestId = enqueueControlRequest({
+    action: input.action,
+    reason: input.reason,
+    round: normalizedRound,
+    source: input.source,
+  });
+  return {
+    ok: true,
+    queued: true,
+    requestId,
+    message: `Rewind to round ${normalizedRound} requested.`,
+    state,
+  };
+}
+
 export function startSwarmRun(options: StartOptions = {}): StartResult {
   const maxRounds = clampRounds(options.maxRounds);
   const workspace = path.resolve(options.workspace || PROJECT_ROOT);
@@ -2673,7 +3001,10 @@ export function startSwarmRun(options: StartOptions = {}): StartResult {
 
   activeRunPromise = runSwarm({ maxRounds, workspace, mode })
     .catch((error) => swarmStore.failRun(error))
-    .finally(() => {
+    .finally(async () => {
+      await teardownRunToolRegistry().catch((error) => {
+        console.error("Failed to tear down MCP tool registry:", error);
+      });
       activeRunPromise = null;
     });
 

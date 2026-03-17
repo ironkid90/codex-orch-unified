@@ -16,5 +16,9 @@ export default defineConfig({
   },
   build: {
     target: 'esnext',
+    // Capacitor serves from file:// so all asset paths must be relative
+    assetsDir: 'assets',
   },
+  // Ensure built assets use relative paths for the Android WebView
+  base: '',
 });

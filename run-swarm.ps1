@@ -3,7 +3,12 @@ param(
   [int]$MaxRounds = 3,
   [ValidateSet("local", "demo")]
   [string]$Mode = "local",
+  [string]$Reason = "",
+  [int]$RewindRound = 0,
   [switch]$Setup,
+  [switch]$Status,
+  [switch]$Pause,
+  [switch]$Resume,
   [switch]$Deploy,
   [switch]$Prod,
   [switch]$Legacy
@@ -14,6 +19,30 @@ $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 if ($Setup) {
     npm run swarm:setup
+    exit $LASTEXITCODE
+}
+
+if ($Status) {
+    npm run swarm:status
+    exit $LASTEXITCODE
+}
+
+if ($Pause) {
+    $pauseArgs = @("run", "swarm:pause")
+    if (-not [string]::IsNullOrWhiteSpace($Reason)) {
+        $pauseArgs += @("--", "--reason", $Reason)
+    }
+    npm @pauseArgs
+    exit $LASTEXITCODE
+}
+
+if ($Resume) {
+    npm run swarm:resume
+    exit $LASTEXITCODE
+}
+
+if ($RewindRound -gt 0) {
+    npm run swarm:rewind -- --round $RewindRound
     exit $LASTEXITCODE
 }
 

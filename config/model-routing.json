@@ -1,138 +1,141 @@
 {
   "version": 1,
-  "updatedAt": "2026-02-26T07:43:34.125Z",
-  "source": "swarm-models optimize (heuristic)",
+  "updatedAt": "2026-03-17T00:13:22.006Z",
+  "source": "swarm-models optimize (live-probe)",
   "probes": [
     {
       "candidateId": "codex-primary",
       "provider": "codex",
-      "model": "codex-5.3",
+      "model": "gpt-5.4",
       "available": true,
       "detail": "Codex CLI detected (OAuth login handled by codex CLI session)."
     },
     {
       "candidateId": "openai-primary",
       "provider": "openai",
-      "model": "gpt-5.2",
-      "available": true,
-      "detail": "Credentials found (live probe disabled)."
+      "model": "codex-5.3",
+      "available": false,
+      "latencyMs": 1099,
+      "detail": "OpenAI OAuth probe failed (401)."
     },
     {
       "candidateId": "gemini-pro",
       "provider": "gemini",
       "model": "gemini-3.1-pro-preview",
-      "available": true,
-      "detail": "Credentials found (live probe disabled)."
+      "available": false,
+      "latencyMs": 720,
+      "detail": "Gemini probe failed (403)."
     },
     {
       "candidateId": "gemini-fast",
       "provider": "gemini",
       "model": "gemini-3.1-flash-preview",
-      "available": true,
-      "detail": "Credentials found (live probe disabled)."
+      "available": false,
+      "latencyMs": 644,
+      "detail": "Gemini probe failed (403)."
     }
   ],
   "assignments": {
     "research": {
-      "provider": "gemini",
-      "model": "gemini-3.1-pro-preview",
-      "score": 100.08,
-      "rationale": "Credentials found (live probe disabled)."
+      "provider": "codex",
+      "model": "gpt-5.4",
+      "score": 87.5,
+      "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
     },
     "worker1": {
       "provider": "codex",
-      "model": "codex-5.3",
+      "model": "gpt-5.4",
       "score": 101.83,
       "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
     },
     "worker2": {
-      "provider": "openai",
-      "model": "gpt-5.2",
-      "score": 100.20000000000002,
-      "rationale": "Credentials found (live probe disabled)."
+      "provider": "codex",
+      "model": "gpt-5.4",
+      "score": 98.92,
+      "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
     },
     "evaluator": {
-      "provider": "openai",
-      "model": "gpt-5.2",
-      "score": 100.02000000000001,
-      "rationale": "Credentials found (live probe disabled)."
+      "provider": "codex",
+      "model": "gpt-5.4",
+      "score": 97.01,
+      "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
     },
     "coordinator": {
-      "provider": "openai",
-      "model": "gpt-5.2",
-      "score": 100.03999999999999,
-      "rationale": "Credentials found (live probe disabled)."
+      "provider": "codex",
+      "model": "gpt-5.4",
+      "score": 94.9,
+      "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
     }
   },
   "fallback": {
     "research": [
       {
-        "provider": "gemini",
-        "model": "gemini-3.1-flash-preview",
-        "score": 98.31,
-        "rationale": "Credentials found (live probe disabled)."
+        "provider": "openai",
+        "model": "codex-5.3",
+        "score": -1000,
+        "rationale": "OpenAI OAuth probe failed (401)."
       },
       {
-        "provider": "openai",
-        "model": "gpt-5.2",
-        "score": 95.03999999999999,
-        "rationale": "Credentials found (live probe disabled)."
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "score": -1000,
+        "rationale": "Gemini probe failed (403)."
       }
     ],
     "worker1": [
       {
         "provider": "openai",
-        "model": "gpt-5.2",
-        "score": 98.94000000000001,
-        "rationale": "Credentials found (live probe disabled)."
+        "model": "codex-5.3",
+        "score": -1000,
+        "rationale": "OpenAI OAuth probe failed (401)."
       },
       {
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
-        "score": 96.33999999999999,
-        "rationale": "Credentials found (live probe disabled)."
+        "score": -1000,
+        "rationale": "Gemini probe failed (403)."
       }
     ],
     "worker2": [
       {
-        "provider": "codex",
+        "provider": "openai",
         "model": "codex-5.3",
-        "score": 98.92,
-        "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
+        "score": -1000,
+        "rationale": "OpenAI OAuth probe failed (401)."
       },
       {
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
-        "score": 98.44000000000001,
-        "rationale": "Credentials found (live probe disabled)."
+        "score": -1000,
+        "rationale": "Gemini probe failed (403)."
       }
     ],
     "evaluator": [
       {
-        "provider": "gemini",
-        "model": "gemini-3.1-pro-preview",
-        "score": 99.68,
-        "rationale": "Credentials found (live probe disabled)."
+        "provider": "openai",
+        "model": "codex-5.3",
+        "score": -1000,
+        "rationale": "OpenAI OAuth probe failed (401)."
       },
       {
-        "provider": "codex",
-        "model": "codex-5.3",
-        "score": 97.01,
-        "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+        "score": -1000,
+        "rationale": "Gemini probe failed (403)."
       }
     ],
     "coordinator": [
       {
-        "provider": "gemini",
-        "model": "gemini-3.1-pro-preview",
-        "score": 99.5,
-        "rationale": "Credentials found (live probe disabled)."
+        "provider": "openai",
+        "model": "codex-5.3",
+        "score": -1000,
+        "rationale": "OpenAI OAuth probe failed (401)."
       },
       {
         "provider": "gemini",
-        "model": "gemini-3.1-flash-preview",
-        "score": 96.53999999999999,
-        "rationale": "Credentials found (live probe disabled)."
+        "model": "gemini-3.1-pro-preview",
+        "score": -1000,
+        "rationale": "Gemini probe failed (403)."
       }
     ]
   }
