@@ -618,7 +618,7 @@ export class McpClientManager {
         if (!server) {
             throw new Error(`MCP server ${serverName} not found or not connected`);
         }
-        const normalizedArgs = Object.keys(args).length ? args : { args: "..." };
+        const normalizedArgs = Object.keys(args).length ? args : {};
         const result = await server.client.callTool({
             name: toolName,
             arguments: normalizedArgs,

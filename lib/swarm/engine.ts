@@ -2986,6 +2986,15 @@ export async function requestSwarmControl(input: {
 }
 
 export function startSwarmRun(options: StartOptions = {}): StartResult {
+  const persisted = swarmStore.getState();
+  if (persisted.running && !activeRunPromise) {
+    swarmStore.failRun(
+      new Error(
+        "Recovered stale persisted run state before starting a new run (no active local runner).",
+      ),
+    );
+  }
+
   const maxRounds = clampRounds(options.maxRounds);
   const workspace = path.resolve(options.workspace || PROJECT_ROOT);
   const mode = resolveRunMode(options.mode);
