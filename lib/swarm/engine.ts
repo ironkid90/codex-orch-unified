@@ -42,11 +42,13 @@ import {
   type RoleExecutionPreference,
 } from "./model-routing";
 import {
+  clearQueuedControlRequests,
   completeControlRequest,
   enqueueControlRequest,
   readQueuedControlRequests,
   type ControlAction,
 } from "./runtime-state";
+import { buildSwarmCodexEnvironment, ensureSwarmCodexHome } from "./codex-home";
 import { swarmStore } from "./store";
 import { AGENT_IDS } from "./types";
 import type {
@@ -58,6 +60,7 @@ import type {
   RunMode,
   SwarmFeatures,
   SwarmRunState,
+  SwarmRuntimeActivity,
 } from "./types";
 import { verifyOutputSafety } from "./verifier";
 // ---- Symphony integration: token accounting + workspace safety ----
@@ -84,6 +87,8 @@ const defaultToolRegistry = createDefaultToolRegistry();
 // ---- Symphony integration: stall detection + token tracking singletons ----
 const STALL_TIMEOUT_MS =
   parseInt(process.env.SWARM_STALL_TIMEOUT_MS ?? "300000", 10) || 300_000;
+const HEARTBEAT_INTERVAL_MS =
+  parseInt(process.env.SWARM_HEARTBEAT_INTERVAL_MS ?? "3000", 10) || 3_000;
 /** Tracks token usage per agent session across the lifetime of a run. */
 const tokenTracker = new TokenTracker();
 /** Module-level workspace manager (validates paths inside PROJECT_ROOT). */
@@ -316,6 +321,7 @@ async function processQueuedControlRequests(round: number): Promise<void> {
           message,
           metadata: { round, action: request.action, source: request.source },
         });
+        swarmStore.refreshPendingControls(true);
         if (ok) {
           swarmStore.appendEvent({
             type: "run.control",
@@ -336,6 +342,7 @@ async function processQueuedControlRequests(round: number): Promise<void> {
           message,
           metadata: { round, action: request.action, source: request.source },
         });
+        swarmStore.refreshPendingControls(true);
         if (ok) {
           swarmStore.appendEvent({
             type: "run.control",
@@ -364,6 +371,7 @@ async function processQueuedControlRequests(round: number): Promise<void> {
           targetRound: rewind.round,
         },
       });
+      swarmStore.refreshPendingControls(true);
       swarmStore.appendEvent({
         type: "run.control",
         round,
@@ -384,6 +392,7 @@ async function processQueuedControlRequests(round: number): Promise<void> {
         message,
         metadata: { round, action: request.action, source: request.source },
       });
+      swarmStore.refreshPendingControls(true);
       const state = swarmStore.getState();
       if (state.runId) {
         swarmStore.appendEvent({
@@ -401,12 +410,18 @@ async function processQueuedControlRequests(round: number): Promise<void> {
 async function runProcess(
   command: string,
   args: string[],
-  opts: { cwd: string; shell?: boolean; onStdout?: (text: string) => void; onStderr?: (text: string) => void },
+  opts: {
+    cwd: string;
+    env?: NodeJS.ProcessEnv;
+    shell?: boolean;
+    onStdout?: (text: string) => void;
+    onStderr?: (text: string) => void;
+  },
 ): Promise<CommandResult> {
   return new Promise<CommandResult>((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
-      env: process.env,
+      env: { ...process.env, ...opts.env },
       windowsHide: true,
       shell: Boolean(opts.shell),
     });
@@ -451,6 +466,30 @@ function setPda(agentId: AgentId, round: number, stage: "perceive" | "decide" | 
     message: `${agentId} -> ${stage}`,
     metadata: { stage },
   });
+}
+
+function updateRuntimeActivity(patch: Partial<SwarmRuntimeActivity>, emit = true): void {
+  swarmStore.setRuntimeActivity(
+    {
+      ...patch,
+      lastHeartbeatAt: nowIso(),
+    },
+    emit,
+  );
+}
+
+function canApplyControlImmediately(state: SwarmRunState): boolean {
+  return !state.activity.activeAgentId && !state.activity.activeStep;
+}
+
+function beginRuntimeHeartbeat(agentId: AgentId, activeStep: string): () => void {
+  const beat = () => updateRuntimeActivity({ activeAgentId: agentId, activeStep }, false);
+  beat();
+  const timer = setInterval(beat, HEARTBEAT_INTERVAL_MS);
+  return () => {
+    clearInterval(timer);
+    updateRuntimeActivity({ activeAgentId: undefined, activeStep: undefined }, false);
+  };
 }
 
 function getGeminiConfig(): GeminiResearchConfig {
@@ -1182,15 +1221,19 @@ async function runOpenAIResearch(
   return extractModelOutputText(payload) || null;
 }
 async function waitIfPaused(round: number, gate: string): Promise<void> {
+  updateRuntimeActivity({ activeGate: gate });
   for (; ;) {
     await processQueuedControlRequests(round);
     const state = swarmStore.getState();
     if (!state.running) {
+      updateRuntimeActivity({ activeGate: undefined }, false);
       throw new Error("Run no longer active.");
     }
     if (!state.paused) {
+      updateRuntimeActivity({ activeGate: undefined }, false);
       return;
     }
+    updateRuntimeActivity({ activeGate: gate }, false);
     swarmStore.appendEvent({
       type: "run.pause_gate",
       round,
@@ -1222,6 +1265,7 @@ async function maybeRequireApprovalBeforeAct(round: number, agentId: AgentId): P
 async function runCodexTask(task: AgentTask): Promise<TokenUsage> {
   const codexBin = process.env.SWARM_CODEX_BIN || "codex";
   const model = task.execution?.model || process.env.SWARM_CODEX_MODEL;
+  const codexHome = await ensureSwarmCodexHome(task.workspace);
   const args = [
     "--dangerously-bypass-approvals-and-sandbox",
     "exec",
@@ -1238,6 +1282,7 @@ async function runCodexTask(task: AgentTask): Promise<TokenUsage> {
   }
   const result = await runProcess(codexBin, args, {
     cwd: task.workspace,
+    env: buildSwarmCodexEnvironment(codexHome),
     onStdout: (text) => emitAgentLog(task.agentId, task.round, text, "info", task.logPrefix),
     onStderr: (text) => emitAgentLog(task.agentId, task.round, text, "warn", task.logPrefix),
   });
@@ -1675,17 +1720,23 @@ async function runAgentTask(task: AgentTask): Promise<AgentTaskResult> {
     await maybeRequireApprovalBeforeAct(task.round, task.agentId);
     await waitIfPaused(task.round, `${task.agentId}-act`);
 
-    const execution = task.mode === "demo" ? runDemoTask(task) : runProviderTask(task);
-    const usage = await runWithStallTimeout(execution, STALL_TIMEOUT_MS, () => {
-      swarmStore.appendEvent({
-        type: "agent.stalled",
-        round: task.round,
-        agentId: task.agentId,
-        level: "warn",
-        message: `${task.agentId} stalled after ${STALL_TIMEOUT_MS}ms with no output; aborting.`,
-        metadata: { stallTimeoutMs: STALL_TIMEOUT_MS },
+    const stopHeartbeat = beginRuntimeHeartbeat(task.agentId, `act -> ${task.target}`);
+    let usage: TokenUsage;
+    try {
+      const execution = task.mode === "demo" ? runDemoTask(task) : runProviderTask(task);
+      usage = await runWithStallTimeout(execution, STALL_TIMEOUT_MS, () => {
+        swarmStore.appendEvent({
+          type: "agent.stalled",
+          round: task.round,
+          agentId: task.agentId,
+          level: "warn",
+          message: `${task.agentId} stalled after ${STALL_TIMEOUT_MS}ms with no output; aborting.`,
+          metadata: { stallTimeoutMs: STALL_TIMEOUT_MS },
+        });
       });
-    });
+    } finally {
+      stopHeartbeat();
+    }
 
     const text = await readFile(task.outFile, "utf8");
     const digest = hashText(text);
@@ -1805,20 +1856,22 @@ async function runResearch(
   await maybeRequireApprovalBeforeAct(round, "research");
   await waitIfPaused(round, "research-act");
 
+  const stopHeartbeat = beginRuntimeHeartbeat("research", "research-act");
+  try {
     if (mode === "demo") {
       await writeFile(outFile, demoOutput("research", round), "utf8");
-      const txt = await readFile(outFile, "utf8");
-      const digest = hashText(txt);
+      const text = await readFile(outFile, "utf8");
+      const digest = hashText(text);
       const tokenUsage = tokenTracker.getSessionTotals(`research:round:${round}`);
       swarmStore.setAgentState("research", {
         phase: "completed",
         round,
         endedAt: nowIso(),
-      outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
-      excerpt: summarizeOutput(txt),
-      pdaStage: "act",
-      taskTarget: "broadcast",
-    });
+        outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
+        excerpt: summarizeOutput(text),
+        pdaStage: "act",
+        taskTarget: "broadcast",
+      });
       swarmStore.appendEvent({
         type: "agent.finished",
         round,
@@ -1826,147 +1879,149 @@ async function runResearch(
         message: "research finished.",
         metadata: { sha256: digest, tokenUsage, sessionTotals: tokenUsage },
       });
-    await appendMessage(
-      roundDir,
-      message({
-        round,
-        from: "research",
-        to: "broadcast",
-        type: "feedback",
-        summary: summarizeOutput(txt),
-        artifactPath: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
-        sha256: digest,
-      }),
-    );
-    return { text: txt, outFile, sha256: digest, failed: false };
-  }
+      await appendMessage(
+        roundDir,
+        message({
+          round,
+          from: "research",
+          to: "broadcast",
+          type: "feedback",
+          summary: summarizeOutput(text),
+          artifactPath: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
+          sha256: digest,
+        }),
+      );
+      return { text, outFile, sha256: digest, failed: false };
+    }
 
-  const terms = extractSearchTerms(seed, []).slice(0, 6);
-  const pattern =
-    terms.length > 0
-      ? terms.join("|")
-      : "coordinator|evaluator|worker|lint|checkpoint|rewind|selector|context";
-  let lines: string[] = [];
-  try {
-    const result = await runProcess(
-      "rg",
-      [
-        "-n",
-        "--max-count",
-        "60",
-        "--glob",
-        "!node_modules/**",
-        "--glob",
-        "!.next/**",
-        "--glob",
-        "!runs/**",
-        pattern,
-        "AGENTS_ARCHITECTURE.md",
-        "AGENTS_KNOWLEDGE.md",
-        "AGENTS_ROADMAP.md",
-        "DEPENDENCIES.md",
-        "lib",
-        "app",
-        "prompts",
-      ],
-      { cwd: workspace },
-    );
-    lines = result.stdout.split(/\r?\n/).filter(Boolean).slice(0, 25);
-  } catch {
-    lines = ["Research fallback: `rg` was not available in this environment."];
-  }
-  const webCfg = getWebSearchConfig();
-  let webSources: WebSearchHit[] = [];
-  if (webCfg.enabled) {
+    const terms = extractSearchTerms(seed, []).slice(0, 6);
+    const pattern =
+      terms.length > 0
+        ? terms.join("|")
+        : "coordinator|evaluator|worker|lint|checkpoint|rewind|selector|context";
+    let lines: string[] = [];
     try {
-      webSources = await runExternalWebResearch(round, seed, lines, webCfg);
-    } catch (error) {
-      swarmStore.appendEvent({
-        type: "research.web",
-        round,
-        agentId: "research",
-        level: "warn",
-        message: error instanceof Error ? error.message : String(error),
-        metadata: { provider: webCfg.provider },
-      });
+      const result = await runProcess(
+        "rg",
+        [
+          "-n",
+          "--max-count",
+          "60",
+          "--glob",
+          "!node_modules/**",
+          "--glob",
+          "!.next/**",
+          "--glob",
+          "!runs/**",
+          pattern,
+          "AGENTS_ARCHITECTURE.md",
+          "AGENTS_KNOWLEDGE.md",
+          "AGENTS_ROADMAP.md",
+          "DEPENDENCIES.md",
+          "lib",
+          "app",
+          "prompts",
+        ],
+        { cwd: workspace },
+      );
+      lines = result.stdout.split(/\r?\n/).filter(Boolean).slice(0, 25);
+    } catch {
+      lines = ["Research fallback: `rg` was not available in this environment."];
     }
-  }
 
-  const providerSignals = [
-    ...lines,
-    ...webSources
-      .slice(0, 8)
-      .map((source) => `${source.title} | ${source.domain || "(unknown)"} | ${source.url}`),
-  ];
-  const researchProvider = execution?.provider || "gemini";
-  const researchModel = execution?.model;
-  let providerInsight: string | null = null;
-  try {
-    if (researchProvider === "openai") {
-      providerInsight = await runOpenAIResearch(round, seed, providerSignals, researchModel);
-    } else if (researchProvider === "gemini") {
-      providerInsight = await runGeminiResearch(workspace, round, seed, providerSignals, researchModel);
+    const webCfg = getWebSearchConfig();
+    let webSources: WebSearchHit[] = [];
+    if (webCfg.enabled) {
+      try {
+        webSources = await runExternalWebResearch(round, seed, lines, webCfg);
+      } catch (error) {
+        swarmStore.appendEvent({
+          type: "research.web",
+          round,
+          agentId: "research",
+          level: "warn",
+          message: error instanceof Error ? error.message : String(error),
+          metadata: { provider: webCfg.provider },
+        });
+      }
     }
-    if (providerInsight) {
+
+    const providerSignals = [
+      ...lines,
+      ...webSources
+        .slice(0, 8)
+        .map((source) => `${source.title} | ${source.domain || "(unknown)"} | ${source.url}`),
+    ];
+    const researchProvider = execution?.provider || "gemini";
+    const researchModel = execution?.model;
+    let providerInsight: string | null = null;
+    try {
+      if (researchProvider === "openai") {
+        providerInsight = await runOpenAIResearch(round, seed, providerSignals, researchModel);
+      } else if (researchProvider === "gemini") {
+        providerInsight = await runGeminiResearch(workspace, round, seed, providerSignals, researchModel);
+      }
+      if (providerInsight) {
+        swarmStore.appendEvent({
+          type: "research.provider",
+          round,
+          agentId: "research",
+          message: `${researchProvider} research provider produced supplemental insights.`,
+          metadata: { provider: researchProvider, model: researchModel || "(default)" },
+        });
+      }
+    } catch (error) {
       swarmStore.appendEvent({
         type: "research.provider",
         round,
         agentId: "research",
-        message: `${researchProvider} research provider produced supplemental insights.`,
+        level: "warn",
+        message: error instanceof Error ? error.message : String(error),
         metadata: { provider: researchProvider, model: researchModel || "(default)" },
       });
     }
-  } catch (error) {
-    swarmStore.appendEvent({
-      type: "research.provider",
-      round,
-      agentId: "research",
-      level: "warn",
-      message: error instanceof Error ? error.message : String(error),
-      metadata: { provider: researchProvider, model: researchModel || "(default)" },
-    });
-  }
 
-  const textLines = [
-    "1) SEARCH_SCOPE:",
-    "- local docs + runtime",
-    ...(webCfg.enabled ? [`- external web adapter (${webCfg.provider})`] : []),
-    "",
-    "2) KEY_TERMS:",
-    terms.length ? `- ${terms.join(", ")}` : "- default terms",
-    "",
-    "3) MATCHED_EVIDENCE:",
-    ...(lines.length ? lines.map((line) => `- ${line}`) : ["- no matches"]),
-  ];
-  if (webCfg.enabled) {
-    textLines.push("", "4) WEB_SOURCES (RANKED):");
-    if (webSources.length) {
-      for (const [index, source] of webSources.entries()) {
-        textLines.push(
-          `- [${index + 1}] score=${source.score.toFixed(2)} | ${source.domain || "(unknown)"} | ${source.title} | ${source.url}`,
-        );
-        if (source.snippet) {
-          textLines.push(`- snippet: ${source.snippet.slice(0, 180)}`);
+    const textLines = [
+      "1) SEARCH_SCOPE:",
+      "- local docs + runtime",
+      ...(webCfg.enabled ? [`- external web adapter (${webCfg.provider})`] : []),
+      "",
+      "2) KEY_TERMS:",
+      terms.length ? `- ${terms.join(", ")}` : "- default terms",
+      "",
+      "3) MATCHED_EVIDENCE:",
+      ...(lines.length ? lines.map((line) => `- ${line}`) : ["- no matches"]),
+    ];
+    if (webCfg.enabled) {
+      textLines.push("", "4) WEB_SOURCES (RANKED):");
+      if (webSources.length) {
+        for (const [index, source] of webSources.entries()) {
+          textLines.push(
+            `- [${index + 1}] score=${source.score.toFixed(2)} | ${source.domain || "(unknown)"} | ${source.title} | ${source.url}`,
+          );
+          if (source.snippet) {
+            textLines.push(`- snippet: ${source.snippet.slice(0, 180)}`);
+          }
+          if (source.reasons.length) {
+            textLines.push(`- rank_factors: ${source.reasons.join("; ")}`);
+          }
         }
-        if (source.reasons.length) {
-          textLines.push(`- rank_factors: ${source.reasons.join("; ")}`);
-        }
-      }
-    } else {
-      textLines.push("- none");
-    }
-  }
-  if (providerInsight) {
-    textLines.push("", webCfg.enabled ? "5) MODEL_PROVIDER_INSIGHTS:" : "4) MODEL_PROVIDER_INSIGHTS:");
-    textLines.push(`- provider: ${researchProvider}`);
-    textLines.push(`- model: ${researchModel || "(default)"}`);
-    for (const line of providerInsight.split(/\r?\n/).slice(0, 20)) {
-      const trimmed = line.trim();
-      if (trimmed) {
-        textLines.push(`- ${trimmed.replace(/^-+\s*/, "")}`);
+      } else {
+        textLines.push("- none");
       }
     }
-  }
+    if (providerInsight) {
+      textLines.push("", webCfg.enabled ? "5) MODEL_PROVIDER_INSIGHTS:" : "4) MODEL_PROVIDER_INSIGHTS:");
+      textLines.push(`- provider: ${researchProvider}`);
+      textLines.push(`- model: ${researchModel || "(default)"}`);
+      for (const line of providerInsight.split(/\r?\n/).slice(0, 20)) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          textLines.push(`- ${trimmed.replace(/^-+\s*/, "")}`);
+        }
+      }
+    }
+
     const text = textLines.join("\n");
     await writeFile(outFile, text, "utf8");
     const digest = hashText(text);
@@ -1975,11 +2030,11 @@ async function runResearch(
       phase: "completed",
       round,
       endedAt: nowIso(),
-    outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
-    excerpt: summarizeOutput(text),
-    pdaStage: "act",
-    taskTarget: "broadcast",
-  });
+      outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
+      excerpt: summarizeOutput(text),
+      pdaStage: "act",
+      taskTarget: "broadcast",
+    });
     swarmStore.appendEvent({
       type: "agent.finished",
       round,
@@ -1987,19 +2042,22 @@ async function runResearch(
       message: "research finished.",
       metadata: { sha256: digest, tokenUsage, sessionTotals: tokenUsage },
     });
-  await appendMessage(
-    roundDir,
-    message({
-      round,
-      from: "research",
-      to: "broadcast",
-      type: "feedback",
-      summary: summarizeOutput(text),
-      artifactPath: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
-      sha256: digest,
-    }),
-  );
-  return { text, outFile, sha256: digest, failed: false };
+    await appendMessage(
+      roundDir,
+      message({
+        round,
+        from: "research",
+        to: "broadcast",
+        type: "feedback",
+        summary: summarizeOutput(text),
+        artifactPath: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
+        sha256: digest,
+      }),
+    );
+    return { text, outFile, sha256: digest, failed: false };
+  } finally {
+    stopHeartbeat();
+  }
 }
 
 async function hashFile(filePath: string): Promise<string> {
@@ -2286,109 +2344,115 @@ async function runCoordinatorEnsemble(
   });
   await maybeRequireApprovalBeforeAct(round, "coordinator");
   await waitIfPaused(round, "coordinator-act");
-  const variants = [
-    { id: "strict", suffix: "\n\nEnsemble mode: prioritize strict correctness." },
-    { id: "balanced", suffix: "\n\nEnsemble mode: balance correctness and velocity." },
-    { id: "risk", suffix: "\n\nEnsemble mode: maximize risk discovery." },
-  ];
-  const results = await Promise.all(
-    variants.map(async (variant) => {
-      const variantOut = path.join(roundDir, `coordinator-${variant.id}.md`);
-      let tokenUsage = createTokenUsage();
-      if (mode === "demo") {
-        await writeFile(variantOut, demoOutput("coordinator", round), "utf8");
-      } else {
-        tokenUsage = await runProviderTask({
-          agentId: "coordinator",
-          round,
-          prompt: `${prompt}${variant.suffix}`,
+
+  const stopHeartbeat = beginRuntimeHeartbeat("coordinator", "coordinator-ensemble");
+  try {
+    const variants = [
+      { id: "strict", suffix: "\n\nEnsemble mode: prioritize strict correctness." },
+      { id: "balanced", suffix: "\n\nEnsemble mode: balance correctness and velocity." },
+      { id: "risk", suffix: "\n\nEnsemble mode: maximize risk discovery." },
+    ];
+    const results = await Promise.all(
+      variants.map(async (variant) => {
+        const variantOut = path.join(roundDir, `coordinator-${variant.id}.md`);
+        let tokenUsage = createTokenUsage();
+        if (mode === "demo") {
+          await writeFile(variantOut, demoOutput("coordinator", round), "utf8");
+        } else {
+          tokenUsage = await runProviderTask({
+            agentId: "coordinator",
+            round,
+            prompt: `${prompt}${variant.suffix}`,
+            outFile: variantOut,
+            workspace,
+            mode,
+            roundDir,
+            target: "broadcast",
+            logPrefix: `coordinator:${variant.id}`,
+            execution,
+          });
+        }
+        const text = await readFile(variantOut, "utf8");
+        for (const issue of verifyOutputSafety(text)) {
+          swarmStore.appendEvent({
+            type: "agent.safety",
+            round,
+            agentId: "coordinator",
+            level: "warn",
+            message: `[${variant.id}] ${issue}`,
+          });
+        }
+        return {
+          id: variant.id,
+          text,
+          status: parseCoordinatorStatus(text),
           outFile: variantOut,
-          workspace,
-          mode,
-          roundDir,
-          target: "broadcast",
-          logPrefix: `coordinator:${variant.id}`,
-          execution,
-        });
-      }
-      const text = await readFile(variantOut, "utf8");
-      for (const issue of verifyOutputSafety(text)) {
-        swarmStore.appendEvent({
-          type: "agent.safety",
-          round,
-          agentId: "coordinator",
-          level: "warn",
-          message: `[${variant.id}] ${issue}`,
-        });
-      }
-      return {
-        id: variant.id,
-        text,
-        status: parseCoordinatorStatus(text),
-        outFile: variantOut,
-        sha256: hashText(text),
-        tokenUsage,
-      };
-    }),
-  );
-  const totalTokenUsage = results.reduce(
-    (usage, result) => addTokenUsage(usage, result.tokenUsage),
-    createTokenUsage(),
-  );
-  const sessionTotals = tokenTracker.recordDelta(`coordinator:round:${round}`, totalTokenUsage);
+          sha256: hashText(text),
+          tokenUsage,
+        };
+      }),
+    );
+    const totalTokenUsage = results.reduce(
+      (usage, result) => addTokenUsage(usage, result.tokenUsage),
+      createTokenUsage(),
+    );
+    const sessionTotals = tokenTracker.recordDelta(`coordinator:round:${round}`, totalTokenUsage);
 
-  const votes: Record<string, number> = {};
-  for (const item of results) {
-    votes[item.status] = (votes[item.status] || 0) + 1;
-  }
-  const selectedStatus = (Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0] ||
-    "REVISE") as RoundStatus;
-  const selected = results.find((item) => item.status === selectedStatus) || results[0];
-  await writeFile(outFile, selected.text, "utf8");
+    const votes: Record<string, number> = {};
+    for (const item of results) {
+      votes[item.status] = (votes[item.status] || 0) + 1;
+    }
+    const selectedStatus = (Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0] ||
+      "REVISE") as RoundStatus;
+    const selected = results.find((item) => item.status === selectedStatus) || results[0];
+    await writeFile(outFile, selected.text, "utf8");
 
-  swarmStore.upsertEnsembleResult({
-    round,
-    selectedVariant: selected.id,
-    selectedStatus,
-    votes,
-  });
-  swarmStore.setAgentState("coordinator", {
-    phase: "completed",
-    endedAt: nowIso(),
-    excerpt: summarizeOutput(selected.text),
-    pdaStage: "act",
-  });
-  swarmStore.appendEvent({
-    type: "agent.finished",
-    round,
-    agentId: "coordinator",
-    message: "coordinator finished.",
-    metadata: {
-      sha256: selected.sha256,
-      tokenUsage: totalTokenUsage,
-      sessionTotals,
-    },
-  });
-  await appendMessage(
-    roundDir,
-    message({
+    swarmStore.upsertEnsembleResult({
       round,
-      from: "coordinator",
-      to: "broadcast",
-      type: "result",
-      summary: `Ensemble selected ${selected.id} (${selectedStatus}).`,
-      artifactPath: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
+      selectedVariant: selected.id,
+      selectedStatus,
+      votes,
+    });
+    swarmStore.setAgentState("coordinator", {
+      phase: "completed",
+      endedAt: nowIso(),
+      excerpt: summarizeOutput(selected.text),
+      pdaStage: "act",
+    });
+    swarmStore.appendEvent({
+      type: "agent.finished",
+      round,
+      agentId: "coordinator",
+      message: "coordinator finished.",
+      metadata: {
+        sha256: selected.sha256,
+        tokenUsage: totalTokenUsage,
+        sessionTotals,
+      },
+    });
+    await appendMessage(
+      roundDir,
+      message({
+        round,
+        from: "coordinator",
+        to: "broadcast",
+        type: "result",
+        summary: `Ensemble selected ${selected.id} (${selectedStatus}).`,
+        artifactPath: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
+        sha256: selected.sha256,
+      }),
+    );
+    return {
+      text: selected.text,
+      outFile,
       sha256: selected.sha256,
-    }),
-  );
-  return {
-    text: selected.text,
-    outFile,
-    sha256: selected.sha256,
-    failed: selected.text.startsWith("ERROR:"),
-    selectedVariant: selected.id,
-    selectedStatus,
-  };
+      failed: selected.text.startsWith("ERROR:"),
+      selectedVariant: selected.id,
+      selectedStatus,
+    };
+  } finally {
+    stopHeartbeat();
+  }
 }
 
 function deriveRoundStatus(
@@ -2794,7 +2858,7 @@ export async function requestSwarmControl(input: {
         state,
       };
     }
-    if (localRunActive) {
+    if (localRunActive && canApplyControlImmediately(state)) {
       const ok = pauseSwarmRun(input.reason);
       return {
         ok,
@@ -2805,12 +2869,14 @@ export async function requestSwarmControl(input: {
     }
     if (state.running) {
       const requestId = enqueueControlRequest(input);
+      swarmStore.refreshPendingControls(true);
+      const stepLabel = state.activity.activeStep || state.activity.activeGate || "the current step";
       return {
         ok: true,
         queued: true,
         requestId,
-        message: "Pause requested. It will apply after the current step finishes.",
-        state,
+        message: `Pause requested. It will apply after ${stepLabel} finishes.`,
+        state: swarmStore.getState(),
       };
     }
     return {
@@ -2841,12 +2907,13 @@ export async function requestSwarmControl(input: {
     }
     if (state.running) {
       const requestId = enqueueControlRequest(input);
+      swarmStore.refreshPendingControls(true);
       return {
         ok: true,
         queued: true,
         requestId,
         message: "Resume requested. It will apply on the active runner.",
-        state,
+        state: swarmStore.getState(),
       };
     }
     return {
@@ -2876,7 +2943,7 @@ export async function requestSwarmControl(input: {
       state,
     };
   }
-  if (localRunActive || !state.running) {
+  if ((localRunActive && canApplyControlImmediately(state)) || !state.running) {
     try {
       const rewind = await rewindSwarmToRound(normalizedRound);
       return {
@@ -2911,12 +2978,13 @@ export async function requestSwarmControl(input: {
     round: normalizedRound,
     source: input.source,
   });
+  swarmStore.refreshPendingControls(true);
   return {
     ok: true,
     queued: true,
     requestId,
     message: `Rewind to round ${normalizedRound} requested.`,
-    state,
+    state: swarmStore.getState(),
   };
 }
 
@@ -2924,6 +2992,8 @@ export function startSwarmRun(options: StartOptions = {}): StartResult {
   const maxRounds = clampRounds(options.maxRounds);
   const workspace = path.resolve(options.workspace || PROJECT_ROOT);
   const mode = resolveRunMode(options.mode);
+  clearQueuedControlRequests();
+  swarmStore.refreshPendingControls(false);
   tokenTracker.reset();
   const runId = swarmStore.startRun({
     workspace,

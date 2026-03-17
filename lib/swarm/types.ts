@@ -9,8 +9,8 @@ export type AgentPhase = "idle" | "queued" | "running" | "completed" | "failed";
 export type PdaStage = "perceive" | "decide" | "act";
 
 export type RunMode = "local" | "demo";
-
 export type RoundStatus = "RUNNING" | "PASS" | "REVISE" | "FAIL";
+export type SwarmControlAction = "pause" | "resume" | "rewind";
 
 export interface AgentState {
   id: AgentId;
@@ -99,6 +99,22 @@ export interface SwarmFeatures {
   approveNextActionGate: boolean;
 }
 
+export interface PendingControlRequest {
+  id: string;
+  action: SwarmControlAction;
+  requestedAt: string;
+  source?: string;
+  reason?: string;
+  round?: number;
+}
+
+export interface SwarmRuntimeActivity {
+  activeAgentId?: AgentId;
+  activeStep?: string;
+  activeGate?: string;
+  lastHeartbeatAt?: string;
+}
+
 export interface IoCoordinatorLastError {
   operationName: string;
   message: string;
@@ -173,6 +189,8 @@ export interface SwarmRunState {
   ensembles: EnsembleResult[];
   events: SwarmEvent[];
   errors: string[];
+  pendingControls: PendingControlRequest[];
+  activity: SwarmRuntimeActivity;
   ioCoordinator: IoCoordinatorSnapshot;
 }
 
@@ -194,6 +212,10 @@ export const DEFAULT_FEATURES: SwarmFeatures = {
   humanInLoop: true,
   approveNextActionGate: false,
 };
+
+export function createRuntimeActivityDefaults(): SwarmRuntimeActivity {
+  return {};
+}
 
 export function createIoCoordinatorDefaults(): IoCoordinatorSnapshot {
   return {

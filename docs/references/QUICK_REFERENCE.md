@@ -26,7 +26,7 @@
 ```bash
 # Node.js (root)
 npm install
-npm run dev                    # Start localhost:3000
+npm run dev                    # Start localhost:3017
 npm run swarm:run              # CLI mode
 npm run lint                   # TypeScript check
 npm run build                  # Production build

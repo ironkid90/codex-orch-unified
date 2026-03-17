@@ -13,6 +13,7 @@ The primary swarm currently provides:
 - A terminal control surface in `scripts/swarm-cli.ts`
 - File-backed runtime state in `runs/_runtime/current-state.json`
 - File-backed pause/resume/rewind requests in `runs/_runtime/control-queue`
+- A repo-local isolated Codex home under `.codex-swarm/` for worker runs
 - Checkpoints and round artifacts under `runs/`
 - Provider/model routing from `config/model-routing.json`
 
@@ -23,6 +24,7 @@ What is implemented now:
 - The real runtime is the fixed orchestrator in `lib/swarm/engine.ts`
 - Dashboard and CLI now read the same persisted swarm state
 - Pause, resume, and rewind can be requested from either the API or CLI
+- Dashboard runtime status now shows queued controls, active gate, and heartbeat
 - Rewind remains bounded to `CHECKPOINT_TARGETS` in `lib/swarm/engine.ts`
 
 What is not implemented yet:
@@ -58,6 +60,7 @@ At minimum, configure the providers you want the swarm to use. Typical options:
 - `GEMINI_API_KEY`
 - `SWARM_RESEARCH_PROVIDER=gemini`
 - `SWARM_CODEX_BIN=codex`
+- `SWARM_CODEX_ISOLATE_HOME=1`
 - `SWARM_WEB_SEARCH=1`
 
 ### 3. Start the primary swarm UI
@@ -66,7 +69,7 @@ At minimum, configure the providers you want the swarm to use. Typical options:
 npm run dev
 ```
 
-Open `http://localhost:3000` and click **Start Swarm**. The dashboard starts and controls the local swarm runtime directly; the Foundry sidecar is not required for this path.
+Open `http://localhost:3017` and click **Start Swarm**. The dashboard starts and controls the local swarm runtime directly; the Foundry sidecar is not required for this path.
 
 ### 4. Run from terminal instead
 
@@ -188,6 +191,8 @@ Interactive terminal controls during `swarm:run`:
 Notes:
 
 - `local` mode executes Codex CLI commands directly.
+- The local swarm now mirrors `~/.codex/auth.json` into a repo-local `.codex-swarm/` home and strips global MCP/agent config from worker runs by default.
+- Set `SWARM_CODEX_ISOLATE_HOME=0` if you explicitly want worker runs to use your full global Codex home.
 - `demo` mode simulates agent outputs for UI/testing.
 - On critical regression, checkpoint rewind can trigger automatically.
 - Codex executable override:

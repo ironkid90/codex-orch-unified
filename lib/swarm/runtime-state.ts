@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 
-import type { SwarmRunState } from "./types";
+import type { PendingControlRequest, SwarmControlAction, SwarmRunState } from "./types";
 
 const PROJECT_ROOT = process.cwd();
 const RUNTIME_DIR = path.join(PROJECT_ROOT, "runs", "_runtime");
@@ -19,7 +19,7 @@ const CONTROL_QUEUE_DIR = path.join(RUNTIME_DIR, "control-queue");
 const CONTROL_HISTORY_DIR = path.join(RUNTIME_DIR, "control-history");
 const STATE_FILE = path.join(RUNTIME_DIR, "current-state.json");
 
-export type ControlAction = "pause" | "resume" | "rewind";
+export type ControlAction = SwarmControlAction;
 
 interface PersistedStateEnvelope {
   savedAt: string;
@@ -144,6 +144,17 @@ export function readQueuedControlRequests(): QueuedControlRequest[] {
     requests.push({ ...parsed, filePath });
   }
   return requests;
+}
+
+export function snapshotQueuedControlRequests(): PendingControlRequest[] {
+  return readQueuedControlRequests().map(({ filePath: _filePath, ...request }) => request);
+}
+
+export function clearQueuedControlRequests(): void {
+  ensureRuntimeDirs();
+  for (const request of readQueuedControlRequests()) {
+    rmSync(request.filePath, { force: true });
+  }
 }
 
 export function completeControlRequest(
