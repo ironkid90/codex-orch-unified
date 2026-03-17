@@ -1,0 +1,53 @@
+{
+  "name": "GitHub Copilot Configuration - Global HAM",
+  "description": "Copilot integration with hierarchical agent memory for token-efficient context management",
+  "memory": {
+    "enabled": true,
+    "type": "hierarchical",
+    "baseDirectory": "./.memory",
+    "primaryContextFile": "./CLAUDE.md",
+    "scopedContextFiles": [
+      "lib/swarm/CLAUDE.md",
+      "lib/providers/CLAUDE.md",
+      "lib/tools/CLAUDE.md",
+      "config/CLAUDE.md",
+      "app/CLAUDE.md",
+      "foundry_agents/CLAUDE.md"
+    ]
+  },
+  "memoryFiles": {
+    "decisions": "./.memory/decisions.md",
+    "patterns": "./.memory/patterns.md",
+    "inbox": "./.memory/inbox.md",
+    "auditLog": "./.memory/audit-log.md",
+    "baseline": "./.memory/baseline-snapshot.md"
+  },
+  "tokenManagement": {
+    "budgetPerRequest": 8000,
+    "prioritizeScoped": false,
+    "allowFullContext": true,
+    "compressionEnabled": true,
+    "estimatedSavings": "96% for root+scoped, up to 60% single-subsystem"
+  },
+  "refresh": {
+    "automatic": true,
+    "onStartup": true,
+    "onSave": ["decisions.md", "patterns.md"],
+    "interval": "1h"
+  },
+  "subagentIntegration": {
+    "enabled": true,
+    "inboxPollingInterval": "5m",
+    "autoMergeReviewed": true,
+    "conflictResolution": "last-write-wins"
+  },
+  "excludePaths": [
+    "node_modules",
+    ".next",
+    "dist",
+    "build",
+    ".git",
+    "runs",
+    "batch"
+  ]
+}

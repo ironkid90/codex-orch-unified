@@ -36,6 +36,10 @@
     "models:show": "tsx scripts/swarm-models.ts show",
     "batch:gen": "node scripts/batch/gen_shards.mjs",
     "batch:run": "node scripts/batch/run_batches.mjs"
+    "memory:refresh": "tsx scripts/memory-refresh.ts refresh",
+    "memory:status": "tsx scripts/memory-refresh.ts status",
+    "memory:merge": "tsx scripts/memory-refresh.ts merge",
+    "memory:help": "tsx scripts/memory-refresh.ts help",
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",

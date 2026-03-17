@@ -7,7 +7,7 @@
 **Options Considered**:
 - **A) Docker-only**: All MCP servers run in containers (high isolation, slow startup, infrastructure dependency)
 - **B) Direct process-only**: Spawn servers directly (fast, risky on untrusted code, hard to debug)
-- **Chosen: Hybrid**: Both Docker and direct execution, selected per-server via `mcp.json` config
+- **Chosen: Hybrid**: Both Docker and direct execution, selected per-server via `mcp-settings.json` config
 
 **Rationale**: 
 - Docker for production safety and clarity of dependencies
@@ -19,7 +19,7 @@
 - Docker registry polling adds ~50ms to startup but acceptable
 - Teams can choose safety vs. speed per server
 
-**Related Files**: lib/swarm/mcp-client.ts, config/mcp.schema.json
+**Related Files**: lib/swarm/mcp-client.ts, lib/swarm/control-center.ts, mcp-settings.json
 
 ---
 
@@ -43,7 +43,7 @@
 - Pause/resume/rewind now fully durable
 - Query performance acceptable for typical swarm sizes (<100 nodes)
 
-**Related Files**: lib/swarm/runtime-state.ts, lib/swarm/engine.ts
+**Related Files**: lib/swarm/runtime-state.ts, lib/swarm/store.ts, lib/swarm/engine.ts
 
 ---
 
@@ -89,7 +89,7 @@
 - Swarms that pass preflight rarely fail mid-execution
 - Teams trust start() calls to be safe
 
-**Related Files**: lib/swarm/control-center.ts
+**Related Files**: lib/swarm/control-center.ts, app/api/swarm/start/route.ts
 
 ---
 
@@ -112,7 +112,7 @@
 - Graceful degradation in direct execution mode
 - Docker mode unaffected (containers have fixed Node versions)
 
-**Related Files**: lib/swarm/mcp-client.ts, lib/swarm/model-routing.ts
+**Related Files**: lib/swarm/mcp-client.ts, lib/swarm/control-center.ts
 
 ---
 
@@ -146,59 +146,65 @@
 **Options Considered**:
 - **A) Full sandbox (containers)**: Safe, slow; every tool needs container image
 - **B) No isolation**: Fast, risky
-- **Chosen: Filesystem-level isolation + safe-eval sandbox for code tools**
+- **Chosen: Filesystem-level isolation + workspace-bounded tool execution guards**
 
 **Rationale**:
 - Containers optional but recommended for untrusted tools
-- Safe-eval limits code execution to expression evaluation (no file I/O in code itself)
+- Workspace and tool path guards prevent tools from escaping the repo root
 - Define allowed workspace paths in tool config
 
-**Outcome**: 
-- workspace-manager.ts enforces allowed paths
-- safe-eval.ts sandboxes dynamic code
-- Tool registry validates path bounds at load time
+**Outcome**:
 
-**Related Files**: lib/swarm/workspace-manager.ts, lib/tools/safe-eval.ts
+- workspace-manager.ts enforces allowed paths
+- read-file/edit-file/execute-shell tools enforce workspace-bounded paths
+- runAgentTask validates workspace containment before execution
+
+**Related Files**: lib/swarm/workspace-manager.ts, lib/swarm/engine.ts, lib/tools/read-file.ts, lib/tools/edit-file.ts, lib/tools/execute-shell.ts
 
 ---
 
-## [2024-Q4] Decision: Hierarchical Configuration (Code → JSON → Env → Machine)
+## 2024-Q4 — Decision: Hierarchical Configuration (Code → JSON → Env → Machine)
 
 **Context**: Configuration needed to be override-able at multiple levels (defaults, per-project, per-user, per-machine) without chaos.
 
 **Options Considered**:
+
 - **A) Single global config file**: Inflexible
 - **B) Environment variables everywhere**: Ugly, hard to document
 - **Chosen: Layered resolution: code defaults < JSON configs < env vars < machine state**
 
 **Rationale**:
+
 - Sensible defaults in code
 - JSON configs for team/project standardization
 - Env vars for CI/CD and secrets
 - Machine state (files, mounted volumes) for local overrides
 
-**Outcome**: 
-- config/providers.schema.ts defines base schema
-- providers.json overrides defaults
-- $PROVIDER_* env vars override JSON
-- Local machine .kilocode/mcp.json can override further (though now marked as security risk)
+**Outcome**:
 
-**Related Files**: config/providers.schema.ts, lib/swarm/store.ts
+- mcp-client.ts hydrates `.env` / `.env.local` before loading MCP settings
+- mcp-settings.json and config/model-routing.json provide JSON-based runtime routing/config
+- model-routing.ts and provider factory code apply env-based overrides and defaults
+- Local machine `.kilocode/mcp.json` can still override further (though marked as a security risk)
+
+**Related Files**: lib/swarm/mcp-client.ts, lib/swarm/model-routing.ts, lib/providers/factory.ts, mcp-settings.json, config/model-routing.json, .env.example
 
 ---
 
-## [2024-Q3] Decision: Graph DSL Support as Extension (Not Primary Path)
+## 2024-Q3 — Decision: Graph DSL Support as Extension (Not Primary Path)
 
 **Context**: Early designs positioned Graph DSL as the unified execution model. In practice, simple cases didn't need it.
 
 **Options Considered**:
+
 - **A) DSL required for all swarms**: Guaranteed consistency; steep learning curve
 - **B) No DSL; purely procedural**: Simple; limited expressiveness
 - **Chosen: DSL as opt-in extension; procedural/fan-out as primary**
 
 **Rationale**: See "Fixed Fan-Out/Fan-In" decision above.
 
-**Outcome**: 
+**Outcome**:
+
 - graph-types.ts and graph-executor.ts exist and work
 - Most new workflows use control-center instead
 - DSL remains available for complex DAG scenarios
@@ -207,24 +213,27 @@
 
 ---
 
-## [2024-Q2] Decision: Python Sidecar as Optional (Not Required)
+## 2024-Q2 — Decision: Python Sidecar as Optional (Not Required)
 
 **Context**: Early architecture embedded Python for tool evaluation and data processing. This added complexity and environment management overhead.
 
 **Options Considered**:
+
 - **A) Python required for all deployments**: Consistent execution, added overhead
 - **B) Pure Node.js; no Python**: Simpler, less flexibility for data tasks
 - **Chosen: Python optional; enabled via config switch**
 
 **Rationale**:
+
 - Teams can opt-in to Python only if needed
 - Reduces deployment footprint for JS-only swarms
 - Simplifies Docker setup for default case
 
-**Outcome**: 
+**Outcome**:
+
 - foundry_agents/ is optional sidecar
 - Swarms work without Python; enabled via provider config
 - CI/CD can skip Python install unless explicitly needed
 
-**Related Files**: foundry_agents/, config/providers.schema.ts
+**Related Files**: foundry_agents/, .env.example, requirements.txt
 
