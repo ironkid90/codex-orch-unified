@@ -146,7 +146,9 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    void loadState();
+    void loadState().catch((err) => {
+      setError(err instanceof Error ? err.message : String(err));
+    });
   }, [loadState]);
 
   useEffect(() => { void loadControlCenter(); }, [loadControlCenter]);
