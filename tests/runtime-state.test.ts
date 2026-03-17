@@ -10,13 +10,17 @@ const TESTS_DIR = path.dirname(TEST_FILE);
 const REPO_ROOT = path.dirname(TESTS_DIR);
 
 async function loadRuntimeStateModule(projectRoot: string) {
-  const previousCwd = process.cwd();
-  process.chdir(projectRoot);
+  const originalCwd = process.cwd;
+  // Avoid mutating the process-wide CWD, which can cause cross-test interference
+  // when test files are executed in parallel. Instead, temporarily override
+  // process.cwd() so that code inside the runtime-state module sees the desired
+  // projectRoot as its current working directory.
+  (process as typeof process & { cwd: () => string }).cwd = () => projectRoot;
   try {
     const moduleUrl = `${pathToFileURL(path.join(REPO_ROOT, "lib", "swarm", "runtime-state.ts")).href}?t=${Date.now()}-${Math.random()}`;
     return await import(moduleUrl);
   } finally {
-    process.chdir(previousCwd);
+    (process as typeof process & { cwd: () => string }).cwd = originalCwd;
   }
 }
 
