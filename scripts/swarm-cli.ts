@@ -7,6 +7,7 @@ import readline from "node:readline";
 import {
   getActiveRunPromise,
   pauseSwarmRun,
+  requestSwarmControl,
   resumeSwarmRun,
   rewindSwarmToRound,
   startSwarmRun,
@@ -220,6 +221,11 @@ function printUsage(): void {
   console.log("      [--no-lintLoop --no-ensembleVoting --no-researchAgent --no-contextCompression]");
   console.log("      [--no-heuristicSelector --no-checkpointing --no-humanInLoop --no-approveNextActionGate]");
   console.log("      [--non-interactive]");
+  console.log("  status                      Show the latest persisted swarm state");
+  console.log("  pause [--reason TEXT]       Pause the active swarm runner");
+  console.log("  resume                      Resume the active swarm runner");
+  console.log("  rewind <round>              Rewind to a checkpoint (run must be paused)");
+  console.log("      [--round N]");
   console.log("  deploy [--path PATH]        One-click Vercel preview deploy");
   console.log("      [--prod]");
 }
@@ -256,22 +262,24 @@ async function setupCommand(): Promise<void> {
     const codexModel = (await ask("Codex model label for routing (default codex-5.3): ")) || "codex-5.3";
     updates.SWARM_CODEX_MODEL = codexModel;
 
-    const openAiAuthMode = (await ask("OpenAI auth mode? [api_key/codex_oauth/none] (default: api_key): "))
+    const openAiAuthMode = (await ask("OpenAI auth mode? [auto/api_key/chatgpt_oauth/bearer_token/none] (default: auto): "))
       .toLowerCase()
-      .trim() || "api_key";
+      .trim() || "auto";
     if (openAiAuthMode === "api_key") {
       const setOpenAi = await askYesNo(ask, "Set or update OPENAI_API_KEY in .env.local?");
       if (setOpenAi) {
         const openAiKey = await ask("OPENAI_API_KEY: ");
         if (openAiKey) {
           updates.OPENAI_API_KEY = openAiKey;
+          updates.OPENAI_BEARER_TOKEN = undefined;
           updates.OPENAI_OAUTH_ACCESS_TOKEN = undefined;
         }
       }
       updates.SWARM_OPENAI_AUTH_MODE = "api_key";
-    } else if (openAiAuthMode === "codex_oauth") {
-      updates.SWARM_OPENAI_AUTH_MODE = "codex_oauth";
+    } else if (openAiAuthMode === "chatgpt_oauth" || openAiAuthMode === "codex_oauth") {
+      updates.SWARM_OPENAI_AUTH_MODE = "chatgpt_oauth";
       updates.OPENAI_API_KEY = undefined;
+      updates.OPENAI_BEARER_TOKEN = undefined;
       const doCodexLogin = await askYesNo(
         ask,
         "Run `codex login` now to authenticate via ChatGPT OAuth for Codex CLI?",
@@ -281,14 +289,49 @@ async function setupCommand(): Promise<void> {
       } else if (doCodexLogin) {
         console.log("Codex CLI is unavailable in PATH; skipping `codex login`.");
       }
+    } else if (openAiAuthMode === "bearer_token") {
+      const bearerToken = await ask("OPENAI_BEARER_TOKEN (or compatible bearer token): ");
+      if (bearerToken) {
+        updates.OPENAI_BEARER_TOKEN = bearerToken;
+        updates.OPENAI_OAUTH_ACCESS_TOKEN = undefined;
+        updates.OPENAI_API_KEY = undefined;
+      }
+      updates.SWARM_OPENAI_AUTH_MODE = "bearer_token";
+    } else if (openAiAuthMode === "auto") {
+      updates.SWARM_OPENAI_AUTH_MODE = "auto";
     } else {
       updates.SWARM_OPENAI_AUTH_MODE = "none";
       updates.OPENAI_API_KEY = undefined;
+      updates.OPENAI_BEARER_TOKEN = undefined;
       updates.OPENAI_OAUTH_ACCESS_TOKEN = undefined;
     }
 
     const openAiModel = (await ask("OpenAI model for swarm tasks (default gpt-5.2): ")) || "gpt-5.2";
     updates.OPENAI_SWARM_MODEL = openAiModel;
+
+    const gatewayChoice = (await ask("Vercel AI Gateway compatibility? [none/api_key/oidc] (default: none): "))
+      .toLowerCase()
+      .trim();
+    if (gatewayChoice === "api_key") {
+      const gatewayKey = await ask("AI_GATEWAY_API_KEY: ");
+      if (gatewayKey) {
+        updates.AI_GATEWAY_API_KEY = gatewayKey;
+        updates.VERCEL_OIDC_TOKEN = undefined;
+      }
+    } else if (gatewayChoice === "oidc") {
+      const oidcToken = await ask("VERCEL_OIDC_TOKEN: ");
+      if (oidcToken) {
+        updates.VERCEL_OIDC_TOKEN = oidcToken;
+        updates.AI_GATEWAY_API_KEY = undefined;
+      }
+    } else if (gatewayChoice === "none") {
+      const clearGateway = await askYesNo(ask, "Disable Vercel AI Gateway compatibility settings?", false);
+      if (clearGateway) {
+        updates.AI_GATEWAY_API_KEY = undefined;
+        updates.AI_GATEWAY_BASE_URL = undefined;
+        updates.VERCEL_OIDC_TOKEN = undefined;
+      }
+    }
 
     const vercelReady = await ensureVercelAuth(ask);
     if (!vercelReady) {
@@ -308,27 +351,82 @@ async function setupCommand(): Promise<void> {
       }
     }
 
-    const providerChoice = (await ask("Gemini provider mode? [none/api/google] (default: none): "))
+    const researchChoice = (await ask("Research provider? [none/openai/gemini/vertex] (default: none): "))
       .toLowerCase()
       .trim();
 
-    if (providerChoice === "api") {
-      const key = await ask("GEMINI_API_KEY: ");
-      const model = (await ask("Gemini model (default gemini-3.1-pro-preview): ")) || "gemini-3.1-pro-preview";
-      if (key) {
+    if (researchChoice === "openai") {
+      const researchModel =
+        (await ask(
+          `OpenAI research model (default ${updates.OPENAI_SWARM_MODEL || process.env.OPENAI_SWARM_MODEL || "gpt-5.2"}): `,
+        )) ||
+        updates.OPENAI_SWARM_MODEL ||
+        process.env.OPENAI_SWARM_MODEL ||
+        "gpt-5.2";
+      updates.SWARM_RESEARCH_PROVIDER = "openai";
+      updates.OPENAI_RESEARCH_MODEL = researchModel;
+    } else if (researchChoice === "gemini") {
+      const geminiMode = (await ask("Gemini auth mode? [api/adc] (default: api): "))
+        .toLowerCase()
+        .trim() || "api";
+      updates.OPENAI_RESEARCH_MODEL = undefined;
+      if (geminiMode === "adc" || geminiMode === "google") {
+        const model = (await ask("Gemini model (default gemini-3.1-pro-preview): ")) || "gemini-3.1-pro-preview";
         updates.SWARM_RESEARCH_PROVIDER = "gemini";
-        updates.GEMINI_API_KEY = key;
         updates.GEMINI_MODEL = model;
         updates.GEMINI_SWARM_MODEL = model;
-        updates.GOOGLE_USE_ADC = undefined;
-        updates.GOOGLE_OAUTH_ACCESS_TOKEN = undefined;
+        updates.GOOGLE_USE_VERTEXAI = "0";
+        updates.GOOGLE_USE_ADC = "1";
+        updates.GEMINI_API_KEY = undefined;
+
+        const checkToken = await runCommand("gcloud", ["auth", "application-default", "print-access-token"]);
+        if (checkToken.code !== 0) {
+          const doLogin = await askYesNo(
+            ask,
+            "Google ADC is not available. Run `gcloud auth application-default login` now?",
+          );
+          if (doLogin) {
+            await runCommand("gcloud", ["auth", "application-default", "login"], { inherit: true });
+          }
+        } else {
+          console.log("Google ADC access token is available.");
+        }
+      } else {
+        const key = await ask("GEMINI_API_KEY: ");
+        const model = (await ask("Gemini model (default gemini-3.1-pro-preview): ")) || "gemini-3.1-pro-preview";
+        if (key) {
+          updates.SWARM_RESEARCH_PROVIDER = "gemini";
+          updates.GEMINI_API_KEY = key;
+          updates.GEMINI_MODEL = model;
+          updates.GEMINI_SWARM_MODEL = model;
+          updates.GOOGLE_USE_VERTEXAI = "0";
+          updates.GOOGLE_USE_ADC = undefined;
+          updates.GOOGLE_OAUTH_ACCESS_TOKEN = undefined;
+        }
       }
-    } else if (providerChoice === "google") {
-      const model = (await ask("Gemini model (default gemini-3.1-pro-preview): ")) || "gemini-3.1-pro-preview";
-      updates.SWARM_RESEARCH_PROVIDER = "gemini";
+    } else if (researchChoice === "vertex") {
+      updates.OPENAI_RESEARCH_MODEL = undefined;
+      const project =
+        (await ask("GOOGLE_CLOUD_PROJECT / VERTEX_AI_PROJECT: ")) ||
+        process.env.GOOGLE_CLOUD_PROJECT ||
+        process.env.VERTEX_AI_PROJECT ||
+        "";
+      const location =
+        (await ask("GOOGLE_CLOUD_LOCATION / VERTEX_AI_LOCATION (default global): ")) ||
+        process.env.GOOGLE_CLOUD_LOCATION ||
+        process.env.VERTEX_AI_LOCATION ||
+        "global";
+      const model = (await ask("Vertex Gemini model (default gemini-2.5-flash): ")) || "gemini-2.5-flash";
+      updates.SWARM_RESEARCH_PROVIDER = "vertex";
+      updates.GOOGLE_USE_VERTEXAI = "1";
+      updates.GOOGLE_USE_ADC = "1";
+      updates.GOOGLE_CLOUD_PROJECT = project || undefined;
+      updates.GOOGLE_CLOUD_LOCATION = location;
+      updates.VERTEX_AI_PROJECT = project || undefined;
+      updates.VERTEX_AI_LOCATION = location;
+      updates.VERTEX_AI_MODEL = model;
       updates.GEMINI_MODEL = model;
       updates.GEMINI_SWARM_MODEL = model;
-      updates.GOOGLE_USE_ADC = "1";
       updates.GEMINI_API_KEY = undefined;
 
       const checkToken = await runCommand("gcloud", ["auth", "application-default", "print-access-token"]);
@@ -341,15 +439,25 @@ async function setupCommand(): Promise<void> {
           await runCommand("gcloud", ["auth", "application-default", "login"], { inherit: true });
         }
       } else {
-        console.log("Google ADC access token is available.");
+        console.log("Google ADC access token is available for Vertex AI.");
       }
-    } else if (providerChoice === "none") {
-      const clearGemini = await askYesNo(ask, "Disable Gemini provider settings in .env.local?", false);
-      if (clearGemini) {
+    } else if (researchChoice === "none") {
+      const clearResearch = await askYesNo(ask, "Disable research-provider routing in .env.local?", false);
+      if (clearResearch) {
         updates.SWARM_RESEARCH_PROVIDER = undefined;
+        updates.OPENAI_RESEARCH_MODEL = undefined;
+      }
+      const clearGemini = await askYesNo(ask, "Also clear Gemini / Vertex credentials from .env.local?", false);
+      if (clearGemini) {
         updates.GEMINI_API_KEY = undefined;
         updates.GEMINI_MODEL = undefined;
         updates.GEMINI_SWARM_MODEL = undefined;
+        updates.GOOGLE_USE_VERTEXAI = undefined;
+        updates.GOOGLE_CLOUD_PROJECT = undefined;
+        updates.GOOGLE_CLOUD_LOCATION = undefined;
+        updates.VERTEX_AI_PROJECT = undefined;
+        updates.VERTEX_AI_LOCATION = undefined;
+        updates.VERTEX_AI_MODEL = undefined;
         updates.GOOGLE_USE_ADC = undefined;
         updates.GOOGLE_OAUTH_ACCESS_TOKEN = undefined;
       }
@@ -434,6 +542,52 @@ function printStateSummary(): void {
   console.log(
     `state: running=${state.running} paused=${state.paused} round=${state.currentRound} status=${latest?.status ?? "IDLE"}`,
   );
+}
+
+async function statusCommand(): Promise<void> {
+  const state = swarmStore.getState();
+  printStateSummary();
+  console.log(`runId: ${state.runId ?? "—"}`);
+  console.log(`workspace: ${state.workspace || "—"}`);
+  console.log(`mode: ${state.mode}`);
+  console.log(`maxRounds: ${state.maxRounds}`);
+  if (state.pauseReason) {
+    console.log(`pauseReason: ${state.pauseReason}`);
+  }
+  const latest = state.rounds.at(-1);
+  if (latest) {
+    console.log(`latestRound: ${latest.round}`);
+    console.log(`latestDecision: ${latest.status}`);
+  }
+}
+
+async function controlCommand(
+  action: "pause" | "resume" | "rewind",
+  flags: Map<string, string | boolean>,
+  positionals: string[],
+): Promise<void> {
+  const requestedRound =
+    action === "rewind"
+      ? Number(flagString(flags, "round", positionals[0] || ""))
+      : undefined;
+  const result = await requestSwarmControl({
+    action,
+    reason: action === "pause" ? flagString(flags, "reason", "Paused from CLI.") : undefined,
+    round: requestedRound,
+    source: "cli",
+  });
+
+  console.log(result.message);
+  if (result.requestId) {
+    console.log(`requestId: ${result.requestId}`);
+  }
+  if (result.rewind) {
+    console.log(`rewind: round=${result.rewind.round} restored=${result.rewind.restoredCount}`);
+  }
+  printStateSummary();
+  if (!result.ok) {
+    process.exitCode = 1;
+  }
 }
 
 async function runCommandInteractive(flags: Map<string, string | boolean>): Promise<void> {
@@ -580,6 +734,14 @@ async function main(): Promise<void> {
   }
   if (command === "run") {
     await runCommandInteractive(flags);
+    return;
+  }
+  if (command === "status") {
+    await statusCommand();
+    return;
+  }
+  if (command === "pause" || command === "resume" || command === "rewind") {
+    await controlCommand(command, flags, positionals);
     return;
   }
   if (command === "deploy") {

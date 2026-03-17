@@ -1,0 +1,66 @@
+{
+  "task": "Revive codex-orch-unified as the primary general orchestration runtime and harden the original Codex swarm path.",
+  "workspace": "C:\\Users\\Gabi\\gencode\\codex-orch-unified",
+  "changes": [
+    {
+      "path": "lib/swarm/runtime-state.ts",
+      "summary": "Added file-backed runtime state persistence and queued control request handling under runs/_runtime."
+    },
+    {
+      "path": "lib/swarm/store.ts",
+      "summary": "Hydrates from persisted runtime state, persists every state mutation, and blocks duplicate starts across processes."
+    },
+    {
+      "path": "lib/swarm/engine.ts",
+      "summary": "Processes queued control requests, exposes requestSwarmControl, and adds guardrails for pause/resume/rewind dispatch."
+    },
+    {
+      "path": "app/api/swarm/control/route.ts",
+      "summary": "Uses the shared control-dispatch path and returns queued request metadata."
+    },
+    {
+      "path": "app/api/swarm/stream/route.ts",
+      "summary": "Polls persisted swarm state so SSE stays current across processes, not just within one Node process."
+    },
+    {
+      "path": "scripts/swarm-cli.ts",
+      "summary": "Added direct status, pause, resume, and rewind commands alongside the interactive run mode."
+    },
+    {
+      "path": "package.json",
+      "summary": "Added explicit swarm control scripts and clarified Foundry as a separate dev path."
+    },
+    {
+      "path": "run-swarm.ps1",
+      "summary": "Added PowerShell status, pause, resume, and rewind entrypoints on top of the main swarm runner."
+    },
+    {
+      "path": "README.md",
+      "summary": "Rewrote the top-level workflow docs to make the Codex swarm the primary runtime and removed stale claims about missing graph/CI/test infrastructure."
+    }
+  ],
+  "commands_to_run": [
+    "npm install",
+    "npm run doctor",
+    "npm run typecheck",
+    "npm run dev",
+    "npm run swarm:status",
+    "npm run swarm:pause",
+    "npm run swarm:resume",
+    "npm run swarm:rewind -- --round 2"
+  ],
+  "verification": {
+    "performed": [
+      "Read back all edited files for structural consistency.",
+      "Confirmed README no longer references the removed graph-dsl/vitest/ci/history claims at the top level.",
+      "Confirmed new CLI and PowerShell control surfaces are wired into the shared requestSwarmControl path."
+    ],
+    "not_performed": [
+      "npm run typecheck",
+      "npm run build:web",
+      "actual dashboard/CLI runtime exercise"
+    ],
+    "reason": "External executables were not launchable from this tool environment."
+  },
+  "outcome": "codex-orch-unified now has a shared file-backed runtime/control layer and a corrected operator path, making it a more coherent starting point for a general Codex-oriented orchestrator."
+}

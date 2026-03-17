@@ -1,140 +1,156 @@
 # Codex Swarm Orchestrator + Live Dashboard
 
-This repository now includes a real-time swarm dashboard with:
+This repository is a Codex-centric multi-agent orchestrator with two runtime tracks:
 
-- Fan-out/fan-in execution loop:
-- `Research` + `Worker-1` + `Evaluator` run each round.
-- `Worker-2` (Auditor) runs conditionally via heuristic selector.
-- `Coordinator` can run in 3-variant ensemble voting mode.
-- Evaluator feedback and research context are injected into the next round.
-- Live status streaming:
-- SSE stream at `api/swarm/stream`.
-- Snapshot API at `api/swarm/state`.
-- Start API at `api/swarm/start`.
-- Control API at `api/swarm/control` for pause/resume/rewind.
-- MGX-style operations UI:
-- Agent cards with phase + excerpts.
-- Round decision panel.
-- Activity timeline + structured agent messages.
-- Checkpoints, lint results, and ensemble outcomes.
-- Unified CLI for setup, run, and deploy flows.
+- Primary runtime: the local swarm in `lib/swarm/engine.ts`
+- Optional sidecar: the separate Foundry workflow in `foundry_agents/workflow_server.py`
 
-## Recent Architectural Improvements
+The primary swarm currently provides:
 
-- **Graph DSL Workflow Engine**: Moved from a hardcoded fan-out/fan-in loop to a dynamic node-and-edge workflow graph built with a new DSL (domain-specific language) in `lib/swarm/graph-dsl.ts`.
-- **Run History Persistence**: Tracks local and batch runs spanning multiple rounds with agent usage metrics written to immutable logs in `runs/history/`.
-- **Dynamic Provider Routing**: Decouples roles from hardcoded models. Uses heuristic thresholds and a multi-level fallback chain resolving via `config/model-routing.json` to intelligently route tasks per capability.
-- **Robust Test Infrastructure**: Replaced older scripts with a robust unified `vitest` infrastructure covering orchestration, parsing, and DSL validations, enforced via comprehensive `.github/workflows/ci.yml` CI/CD actions.
-- **OpenTelemetry Observability**: Spans and traces instrumenting agent PDA loops directly in `lib/swarm/engine.ts`.
+- A fixed fan-out/fan-in orchestration loop for `research`, `worker1`, `worker2`, `evaluator`, and `coordinator`
+- A Next.js dashboard in `app/page.tsx`
+- API control endpoints in `app/api/swarm/*`
+- A terminal control surface in `scripts/swarm-cli.ts`
+- File-backed runtime state in `runs/_runtime/current-state.json`
+- File-backed pause/resume/rewind requests in `runs/_runtime/control-queue`
+- Checkpoints and round artifacts under `runs/`
+- Provider/model routing from `config/model-routing.json`
+- Built-in MCP tool loading from `mcp-settings.json`, including Docker MCP registry manifests
 
-## Architecture
+## Current Runtime Status
 
-- `run-swarm.ps1` remains available.
-- New runtime lives in `lib/swarm/engine.ts`. (Wired to the Graph DSL executor).
-- Parsing/verification utilities:
-- `lib/swarm/parse.ts` for status/decision extraction.
-- `lib/swarm/verifier.ts` for deterministic safety checks.
-- `runs/round-*/messages.jsonl` for structured inter-agent communication.
-- UI + APIs:
-- `app/page.tsx`
-- `app/api/swarm/*`
+What is implemented now:
 
-## Deployment (From Scratch) & Local Setup
+- The real runtime is the fixed orchestrator in `lib/swarm/engine.ts`
+- Dashboard and CLI now read the same persisted swarm state
+- Pause, resume, and rewind can be requested from either the API or CLI
+- Rewind remains bounded to `CHECKPOINT_TARGETS` in `lib/swarm/engine.ts`
+
+What is not implemented yet:
+
+- No graph DSL executor is wired into the active runtime
+- No durable multi-user job queue or remote worker pool
+- No full CI/test hardening for the orchestration layer yet
+
+## Quick Start
 
 ### Prerequisites
 
-- Node.js >= 20.0 (Recommend `nvm` or `fnm`)
-- Python >= 3.10
+- Node.js 20+
+- Python 3.10+
 - Git
+- Codex CLI in `PATH` for `local` mode
 
-### 1. Clone & Bootstrap
-
-```bash
-git clone <your-repo-url> codex-orch
-cd codex-orch
-```
-
-### 2. Environment Configuration
-
-```bash
-cp .env.example .env.local
-```
-
-Add your respective API keys to `.env.local` (e.g., `OPENAI_API_KEY`, `GEMINI_API_KEY`) and toggle any capabilities (like `SWARM_WEB_SEARCH=1`).
-
-### 3. Install Dependencies & Build
-
-Our `package.json` relies on a centralized boostrap script to simultaneously prep both the monolithic Node environment and the Python `.venv` environment for the Agent Framework wrapper.
+### 1. Install and bootstrap
 
 ```bash
 npm install
 npm run bootstrap
-npm run build:all
-```
-
-### 4. Interactive Execution
-
-**To run the GUI (Next.js Dashboard) + Agent Server in parallel:**
-
-```bash
-npm run dev:all
-```
-
-Open [http://localhost:3000](http://localhost:3000) and click **Start swarm**.
-
-**To run via CLI only:**
-
-```bash
-npm run swarm:run -- --mode local --max-rounds 3
-```
-
-### 5. Multi-Runtime Docker Deployment
-
-If deploying to a pristine environment without local tooling, leverage the multi-stage Docker deployment:
-
-```bash
-docker-compose up --build -d
-```
-
-This orchestrates the Node dashboard, backend APIs, Python foundry service, and tracer services autonomously.
-
-## Unified Commands (GUI + CLI + Agent)
-
-- Health check:
-
-```bash
 npm run doctor
 ```
 
-- Compile all stacks:
+`bootstrap` also creates `.env.local` from `.env.example` when needed and installs the Python sidecar dependencies into `.venv`.
+
+### 2. Configure `.env.local`
+
+At minimum, configure the providers you want the swarm to use. Typical options:
+
+- `OPENAI_API_KEY`
+- `SWARM_OPENAI_AUTH_MODE=chatgpt_oauth`
+- `OPENAI_BEARER_TOKEN`
+- `OPENAI_RESEARCH_MODEL`
+- `SWARM_RESEARCH_PROVIDER=openai`
+- `GEMINI_API_KEY`
+- `SWARM_RESEARCH_PROVIDER=gemini`
+- `SWARM_RESEARCH_PROVIDER=vertex`
+- `SWARM_CODEX_BIN=codex`
+- `SWARM_WEB_SEARCH=1`
+
+Compatibility shortcuts:
+
+- Vercel AI Gateway: `AI_GATEWAY_API_KEY` or `VERCEL_OIDC_TOKEN`
+- Vertex AI Gemini: `GOOGLE_USE_VERTEXAI=1`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`
+
+### 3. Start the primary swarm UI
 
 ```bash
-npm run build:all
+npm run dev
 ```
 
-- GUI only (Next.js):
+Open `http://localhost:3017` and click **Start Swarm**. The dashboard starts and controls the local swarm runtime directly; the Foundry sidecar is not required for this path.
 
-```bash
-npm run dev:gui
-```
-
-- Agent server only (Foundry workflow):
-
-```bash
-npm run dev:agent
-```
-
-- GUI + agent server together:
-
-```bash
-npm run dev:all
-```
-
-- Swarm CLI:
+### 4. Run from terminal instead
 
 ```bash
 npm run swarm:run -- --mode local --max-rounds 3
 ```
+
+### 5. Observe and control the active run
+
+```bash
+npm run swarm:status
+npm run swarm:pause
+npm run swarm:resume
+npm run swarm:rewind -- --round 2
+```
+
+PowerShell entrypoint equivalents:
+
+```powershell
+.\run-swarm.ps1
+.\run-swarm.ps1 -Status
+.\run-swarm.ps1 -Pause -Reason "Review current round"
+.\run-swarm.ps1 -Resume
+.\run-swarm.ps1 -RewindRound 2
+```
+
+## Runtime Surfaces
+
+- Dashboard only: `npm run dev`
+- CLI only: `npm run swarm:run -- --mode local --max-rounds 3`
+- Optional Foundry sidecar only: `npm run dev:foundry`
+- Dashboard + Foundry sidecar: `npm run dev:all`
+
+The Foundry path is optional and does not power the primary Codex swarm loop.
+
+## Auth And Compatibility Notes
+
+- OpenAI platform requests still officially use API keys. In this repo, `chatgpt_oauth` means “use a bearer token from `OPENAI_BEARER_TOKEN` / `OPENAI_OAUTH_ACCESS_TOKEN`, or import the local Codex session from `~/.codex/auth.json`.”
+- Vercel AI Gateway compatibility is handled through the OpenAI-compatible path. If `AI_GATEWAY_API_KEY` or `VERCEL_OIDC_TOKEN` is set, the runtime defaults the OpenAI base URL to `https://ai-gateway.vercel.sh/v1`.
+- Vertex AI Gemini compatibility is handled through Google auth plus the Vertex OpenAI-compatible endpoint. Set `GOOGLE_USE_VERTEXAI=1` with `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`.
+
+## Unified MCP Support
+
+Swarm now supports two MCP configuration paths from the same `mcp-settings.json` file:
+
+- Direct MCP client entries under `mcpServers`
+- Docker MCP registry entries under `dockerRegistry`
+
+What the Docker-backed path does:
+
+- `type: server` manifests are launched as containerized stdio servers via `docker run`
+- `type: remote` manifests are connected over `streamable-http` or `sse`
+- Connected MCP tools are injected into the agent tool loop automatically
+- Wrapped tool names are exposed to the model as `mcp_<server>__<tool>`
+
+Starter example:
+
+- `mcp-settings.docker.example.json`
+
+Typical workflow:
+
+1. Clone `docker/mcp-registry`
+2. Copy `mcp-settings.docker.example.json` to `mcp-settings.json`
+3. Update `dockerRegistry.registryPath`
+4. Enable the servers you want, for example `docker-docs` or `ast-grep`
+5. Start the swarm normally; MCP tools are loaded at run start
+
+Notes and current limits:
+
+- Containerized servers require Docker Desktop / Docker Engine locally
+- Remote catalog entries using explicit `remote.headers` are supported directly
+- OAuth-heavy remote entries may still require manual header/token overrides instead of a full interactive OAuth flow
+- Docker registry `allowHosts` constraints are not yet enforced by Swarm's plain `docker run` adapter
 
 ## Multi-Model Router + Role Optimizer
 
@@ -160,10 +176,11 @@ npx tsx scripts/swarm-models.ts optimize --live
 Runtime behavior:
 
 - Swarm loads model routing at run start and applies per-role provider execution.
+- `SWARM_RESEARCH_PROVIDER` overrides the `research` role even when `config/model-routing.json` exists.
 - Providers supported in runtime:
   - `codex` (Codex CLI execution; OAuth handled by Codex login session)
-  - `openai` (`OPENAI_API_KEY` or `OPENAI_OAUTH_ACCESS_TOKEN`)
-  - `gemini` (`GEMINI_API_KEY` or Google OAuth/ADC)
+  - `openai` (`OPENAI_API_KEY`, bearer token, ChatGPT/Codex session import, or AI Gateway compatibility)
+  - `gemini` (`GEMINI_API_KEY`, Google OAuth/ADC, or Vertex AI compatibility)
 
 ## VS Code Integration (Copilot/Codex Friendly)
 
@@ -193,6 +210,10 @@ The same runtime features are available from terminal:
 ```bash
 npm run swarm:setup
 npm run swarm:run -- --mode local --max-rounds 3
+npm run swarm:status
+npm run swarm:pause
+npm run swarm:resume
+npm run swarm:rewind -- --round 2
 ```
 
 Or via PowerShell entrypoint:
@@ -200,6 +221,10 @@ Or via PowerShell entrypoint:
 ```powershell
 .\run-swarm.ps1              # advanced CLI mode
 .\run-swarm.ps1 -Setup       # auth/API setup
+.\run-swarm.ps1 -Status      # current persisted state
+.\run-swarm.ps1 -Pause       # pause active run
+.\run-swarm.ps1 -Resume      # resume active run
+.\run-swarm.ps1 -RewindRound 2
 .\run-swarm.ps1 -Deploy      # one-click Vercel preview deploy
 .\run-swarm.ps1 -Legacy      # old direct script path
 ```
@@ -224,6 +249,14 @@ SWARM_CODEX_BIN=codex
 
 Gemini provider options (optional):
 
+- OpenAI research mode:
+
+```bash
+SWARM_RESEARCH_PROVIDER=openai
+SWARM_OPENAI_AUTH_MODE=chatgpt_oauth
+OPENAI_RESEARCH_MODEL=gpt-5.2
+```
+
 - API key mode:
 
 ```bash
@@ -242,6 +275,17 @@ GEMINI_MODEL=gemini-3-pro
 
 When `GOOGLE_USE_ADC=1`, the runtime attempts:
 `gcloud auth application-default print-access-token`.
+
+- Vertex AI Gemini mode:
+
+```bash
+SWARM_RESEARCH_PROVIDER=vertex
+GOOGLE_USE_VERTEXAI=1
+GOOGLE_USE_ADC=1
+GOOGLE_CLOUD_PROJECT=your-project
+GOOGLE_CLOUD_LOCATION=global
+VERTEX_AI_MODEL=gemini-2.5-flash
+```
 
 External web research adapter (optional):
 

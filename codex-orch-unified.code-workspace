@@ -23,6 +23,7 @@
       "my-app": true,
       "roocode-ref": true
     },
-    "chatgpt.followUpQueueMode": "steer"
+    "chatgpt.followUpQueueMode": "steer",
+    "workbench.experimental.cloudChanges.partialMatches.enabled": true
   }
 }

@@ -1,0 +1,3153 @@
+diff --git a/lib/swarm/engine.ts b/lib/swarm/engine.ts
+index baf27d4..8f22675 100644
+--- a/lib/swarm/engine.ts
++++ b/lib/swarm/engine.ts
+@@ -14,6 +14,7 @@ import {
+ } from "node:fs/promises";
+ import path from "node:path";
+ import OpenAI from "openai";
++import { IOCoordinator } from "./io-coordinator";
+ import { createProvider } from "../providers/factory";
+ import type {
+   Message as ProviderMessage,
+@@ -53,7 +54,14 @@ import type {
+ } from "./types";
+ import { verifyOutputSafety } from "./verifier";
+ // ---- Symphony integration: token accounting + workspace safety ----
+-import { TokenTracker } from "./token-tracker";
++import {
++  TokenTracker,
++  addTokenUsage,
++  createTokenUsage,
++  normalizeTokenUsage,
++  subtractTokenUsage,
++  type TokenUsage,
++} from "./token-tracker";
+ import { WorkspaceManager } from "./workspace-manager";
+ 
+ const PROJECT_ROOT = process.cwd();
+@@ -213,6 +221,14 @@ function hashText(text: string): string {
+   return createHash("sha256").update(text, "utf8").digest("hex");
+ }
+ 
++function createTaskTokenSessionId(task: AgentTask): string {
++  return `${task.agentId}:round:${task.round}`;
++}
++
++function formatTokenUsage(usage: TokenUsage): string {
++  return `input=${usage.inputTokens} output=${usage.outputTokens} total=${usage.totalTokens}`;
++}
++
+ function clampRounds(value?: number): number {
+   const parsed = Number.isFinite(value) ? Math.floor(value as number) : 3;
+   return Math.max(1, Math.min(MAX_ALLOWED_ROUNDS, parsed || 3));
+@@ -850,6 +866,82 @@ function extractGeminiText(payload: unknown): string {
+     .trim();
+ }
+ 
++function extractOpenAIUsage(payload: unknown): TokenUsage {
++  const usageCandidate = payload as {
++    usage?: {
++      input_tokens?: number | null;
++      output_tokens?: number | null;
++      total_tokens?: number | null;
++      prompt_tokens?: number | null;
++      completion_tokens?: number | null;
++    };
++  };
++  const usage = usageCandidate.usage;
++  if (!usage) {
++    return createTokenUsage();
++  }
++
++  return normalizeTokenUsage({
++    inputTokens:
++      typeof usage.input_tokens === "number"
++        ? usage.input_tokens
++        : typeof usage.prompt_tokens === "number"
++          ? usage.prompt_tokens
++          : 0,
++    outputTokens:
++      typeof usage.output_tokens === "number"
++        ? usage.output_tokens
++        : typeof usage.completion_tokens === "number"
++          ? usage.completion_tokens
++          : 0,
++    totalTokens: typeof usage.total_tokens === "number" ? usage.total_tokens : undefined,
++  });
++}
++
++function extractGeminiUsage(payload: unknown): TokenUsage {
++  const usageCandidate = payload as {
++    usageMetadata?: {
++      promptTokenCount?: number;
++      candidatesTokenCount?: number;
++      totalTokenCount?: number;
++    };
++  };
++  const usage = usageCandidate.usageMetadata;
++  if (!usage) {
++    return createTokenUsage();
++  }
++
++  return normalizeTokenUsage({
++    inputTokens: typeof usage.promptTokenCount === "number" ? usage.promptTokenCount : 0,
++    outputTokens: typeof usage.candidatesTokenCount === "number" ? usage.candidatesTokenCount : 0,
++    totalTokens: typeof usage.totalTokenCount === "number" ? usage.totalTokenCount : undefined,
++  });
++}
++
++async function runWithStallTimeout<T>(
++  task: Promise<T>,
++  timeoutMs: number,
++  onStall: () => void,
++): Promise<T> {
++  let timer: NodeJS.Timeout | null = null;
++
++  try {
++    return await Promise.race([
++      task,
++      new Promise<T>((_resolve, reject) => {
++        timer = setTimeout(() => {
++          onStall();
++          reject(new Error(`Task stalled after ${timeoutMs}ms.`));
++        }, timeoutMs);
++      }),
++    ]);
++  } finally {
++    if (timer) {
++      clearTimeout(timer);
++    }
++  }
++}
++
+ async function runGeminiResearch(
+   workspace: string,
+   round: number,
+@@ -938,1369 +1030,1487 @@ async function runOpenAIResearch(
+   const oauthToken = process.env.OPENAI_OAUTH_ACCESS_TOKEN || "";
+   const maxOutputTokens = parseClampedInt(process.env.OPENAI_RESEARCH_MAX_OUTPUT_TOKENS, 700, 128, 2048);
+ 
+-  if (apiKey) {
+-    const client = new OpenAI({
+-      apiKey,
+-      baseURL: process.env.OPENAI_BASE_URL || undefined,
+-    });
+-    const response = await client.responses.create({
+-      model,
+-      input: prompt,
+-      temperature: 0.2,
+-      max_output_tokens: maxOutputTokens,
+-    });
+-    return extractModelOutputText(response) || null;
+-  }
+ 
+-  if (!oauthToken) {
+-    return null;
+-  }
++  async function runGeminiResearch(
++    workspace: string,
++    round: number,
++    seed: string,
++    localSignals: string[],
++    modelOverride?: string,
++  ): Promise<string | null> {
++    const cfg = getGeminiConfig();
++    const model = modelOverride || cfg.model;
++    if (!cfg.providerEnabled) {
++      return null;
++    }
+ 
+-  const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+-  const response = await fetch(`${baseUrl}/responses`, {
+-    method: "POST",
+-    headers: {
++    const prompt = [
++      "You are a research assistant inside a coding swarm orchestration runtime.",
++      "Summarize key implementation and risk guidance from these local signals.",
++      "Return concise bullet points with concrete next actions.",
++      "",
++      `Round: ${round}`,
++      `Seed: ${seed || "(none)"}`,
++      "Signals:",
++      ...localSignals.slice(0, 20).map((line) => `- ${line}`),
++    ].join("\n");
++
++    const body = {
++      contents: [
++        {
++          role: "user",
++          parts: [{ text: prompt }],
++        },
++      ],
++      generationConfig: {
++        temperature: 0.2,
++        maxOutputTokens: 700,
++      },
++    };
++
++    let token: string | undefined = cfg.oauthToken;
++    if (!cfg.apiKey && !token && cfg.useAdc) {
++      token = (await getGoogleAccessTokenFromAdc(workspace)) || undefined;
++    }
++    if (!cfg.apiKey && !token) {
++      return null;
++    }
++
++    const endpoint = `${cfg.baseUrl}/models/${encodeURIComponent(model)}:generateContent`;
++    const url = cfg.apiKey ? `${endpoint}?key=${encodeURIComponent(cfg.apiKey)}` : endpoint;
++    const headers: Record<string, string> = {
+       "content-type": "application/json",
+-      authorization: `Bearer ${oauthToken}`,
+-    },
+-    body: JSON.stringify({
+-      model,
+-      input: prompt,
+-      temperature: 0.2,
+-      max_output_tokens: maxOutputTokens,
+-    }),
+-  });
+-  if (!response.ok) {
+-    throw new Error(`OpenAI research request failed with ${response.status}`);
++    };
++    if (token) {
++      headers.authorization = `Bearer ${token}`;
++    }
++
++    const response = await IOCoordinator.executeWithResilience(
++      'GeminiResearchFetch',
++      () => fetch(url, {
++        method: "POST",
++        headers,
++        body: JSON.stringify(body),
++      }),
++      { maxRetries: 3 }
++    );
++    if (!response.ok) {
++      throw new Error(`Gemini request failed with ${response.status}`);
++    }
++    const json = (await response.json()) as unknown;
++    return extractGeminiText(json) || null;
++  }
++
++  async function runOpenAIResearch(
++    round: number,
++    seed: string,
++    localSignals: string[],
++    modelOverride?: string,
++  ): Promise<string | null> {
++    const model = modelOverride || process.env.OPENAI_RESEARCH_MODEL || process.env.OPENAI_SWARM_MODEL || "gpt-5.2";
++    const prompt = [
++      "You are a research assistant inside a coding swarm orchestration runtime.",
++      "Summarize key implementation and risk guidance from these local signals.",
++      "Return concise bullet points with concrete next actions.",
++      "",
++      `Round: ${round}`,
++      `Seed: ${seed || "(none)"}`,
++      "Signals:",
++      ...localSignals.slice(0, 20).map((line) => `- ${line}`),
++    ].join("\n");
++
++    const apiKey = process.env.OPENAI_API_KEY || "";
++    const oauthToken = process.env.OPENAI_OAUTH_ACCESS_TOKEN || "";
++    const maxOutputTokens = parseClampedInt(process.env.OPENAI_RESEARCH_MAX_OUTPUT_TOKENS, 700, 128, 2048);
++
++    if (apiKey) {
++      const client = new OpenAI({
++        apiKey,
++        baseURL: process.env.OPENAI_BASE_URL || undefined,
++      });
++      const response = await IOCoordinator.executeWithResilience(
++        'OpenAIResearch',
++        () => client.responses.create({
++          model,
++          input: prompt,
++          temperature: 0.2,
++          max_output_tokens: maxOutputTokens,
++        }),
++        { maxRetries: 3 }
++      );
++      return extractModelOutputText(response) || null;
++    }
++
++    if (!oauthToken) {
++      return null;
++    }
++
++    const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
++    const response = await IOCoordinator.executeWithResilience(
++      'OpenAIResearchFetch',
++      () => fetch(`${baseUrl}/responses`, {
++        method: "POST",
++        headers: {
++          "content-type": "application/json",
++          authorization: `Bearer ${oauthToken}`,
++        },
++        body: JSON.stringify({
++          model,
++          input: prompt,
++          temperature: 0.2,
++          max_output_tokens: maxOutputTokens,
++        }),
++      }),
++      { maxRetries: 3 }
++    );
++    if (!response.ok) {
++      throw new Error(`OpenAI research request failed with ${response.status}`);
++    }
++    const json = (await response.json()) as unknown;
++    return extractModelOutputText(json) || null;
++  }
++  async function waitIfPaused(round: number, gate: string): Promise<void> {
++    for (; ;) {
++      const state = swarmStore.getState();
++      if (!state.running) {
++        throw new Error("Run no longer active.");
++      }
++      if (!state.paused) {
++        return;
++      }
++      swarmStore.appendEvent({
++        type: "run.pause_gate",
++        round,
++        message: `Paused at ${gate}; waiting for resume.`,
++      });
++      await new Promise((resolve) => setTimeout(resolve, 800));
++    }
+   }
+-  const json = (await response.json()) as unknown;
+-  return extractModelOutputText(json) || null;
+-}
+-async function waitIfPaused(round: number, gate: string): Promise<void> {
+-  for (;;) {
++
++  async function maybeRequireApprovalBeforeAct(round: number, agentId: AgentId): Promise<void> {
+     const state = swarmStore.getState();
+-    if (!state.running) {
+-      throw new Error("Run no longer active.");
+-    }
+-    if (!state.paused) {
++    if (!state.running || !state.features.humanInLoop || !state.features.approveNextActionGate) {
+       return;
+     }
++
++    const reason = `Approval required before ${agentId} act step.`;
+     swarmStore.appendEvent({
+-      type: "run.pause_gate",
++      type: "run.approval_gate",
+       round,
+-      message: `Paused at ${gate}; waiting for resume.`,
++      agentId,
++      message: reason,
+     });
+-    await new Promise((resolve) => setTimeout(resolve, 800));
+-  }
+-}
+-
+-async function maybeRequireApprovalBeforeAct(round: number, agentId: AgentId): Promise<void> {
+-  const state = swarmStore.getState();
+-  if (!state.running || !state.features.humanInLoop || !state.features.approveNextActionGate) {
+-    return;
++    if (!state.paused) {
++      swarmStore.setPaused(true, reason);
++    }
++    await waitIfPaused(round, `${agentId}-approval`);
++  }
++
++  async function runCodexTask(task: AgentTask): Promise<TokenUsage> {
++    const codexBin = process.env.SWARM_CODEX_BIN || "codex";
++    const model = task.execution?.model || process.env.SWARM_CODEX_MODEL;
++    const args = [
++      "--dangerously-bypass-approvals-and-sandbox",
++      "exec",
++      "--cd",
++      task.workspace,
++      "--skip-git-repo-check",
++      "--json",
++      task.prompt,
++      "-o",
++      task.outFile,
++    ];
++    if (model && process.env.SWARM_CODEX_SUPPORTS_MODEL_FLAG === "1") {
++      args.push("--model", model);
++    }
++    const result = await runProcess(codexBin, args, {
++      cwd: task.workspace,
++      onStdout: (text) => emitAgentLog(task.agentId, task.round, text, "info", task.logPrefix),
++      onStderr: (text) => emitAgentLog(task.agentId, task.round, text, "warn", task.logPrefix),
++    });
++    if (result.exitCode !== 0) {
++      throw new Error(`Codex exited ${result.exitCode}: ${result.stderr.slice(-400)}`);
++    }
++    return createTokenUsage();
+   }
+ 
+-  const reason = `Approval required before ${agentId} act step.`;
+-  swarmStore.appendEvent({
+-    type: "run.approval_gate",
+-    round,
+-    agentId,
+-    message: reason,
+-  });
+-  if (!state.paused) {
+-    swarmStore.setPaused(true, reason);
+-  }
+-  await waitIfPaused(round, `${agentId}-approval`);
+-}
++  async function runOpenAITask(task: AgentTask): Promise<TokenUsage> {
++    const model = task.execution?.model || process.env.OPENAI_SWARM_MODEL || "gpt-5.2";
++    const maxOutputTokens = parseClampedInt(process.env.OPENAI_SWARM_MAX_OUTPUT_TOKENS, 2200, 256, 8192);
++    const oauthToken = process.env.OPENAI_OAUTH_ACCESS_TOKEN || "";
++    const apiKey = process.env.OPENAI_API_KEY || "";
+ 
+-async function runCodexTask(task: AgentTask): Promise<void> {
+-  const codexBin = process.env.SWARM_CODEX_BIN || "codex";
+-  const model = task.execution?.model || process.env.SWARM_CODEX_MODEL;
+-  const args = [
+-    "--dangerously-bypass-approvals-and-sandbox",
+-    "exec",
+-    "--cd",
+-    task.workspace,
+-    "--skip-git-repo-check",
+-    "--json",
+-    task.prompt,
+-    "-o",
+-    task.outFile,
+-  ];
+-  if (model && process.env.SWARM_CODEX_SUPPORTS_MODEL_FLAG === "1") {
+-    args.push("--model", model);
+-  }
+-  const result = await runProcess(codexBin, args, {
+-    cwd: task.workspace,
+-    onStdout: (text) => emitAgentLog(task.agentId, task.round, text, "info", task.logPrefix),
+-    onStderr: (text) => emitAgentLog(task.agentId, task.round, text, "warn", task.logPrefix),
+-  });
+-  if (result.exitCode !== 0) {
+-    throw new Error(`Codex exited ${result.exitCode}: ${result.stderr.slice(-400)}`);
+-  }
+-}
++    if (apiKey) {
++      const client = new OpenAI({
++        apiKey,
++        baseURL: process.env.OPENAI_BASE_URL || undefined,
++      });
++      const response = await IOCoordinator.executeWithResilience(
++        'OpenAITask',
++        () => client.responses.create({
++          model,
++          input: task.prompt,
++          max_output_tokens: maxOutputTokens,
++          temperature: 0.2,
++        }),
++        { maxRetries: 3 }
++      );
++      const text = extractModelOutputText(response) || "(empty response)";
++      await writeFile(task.outFile, text, "utf8");
++      return extractOpenAIUsage(response as unknown);
++    }
+ 
+-async function runOpenAITask(task: AgentTask): Promise<void> {
+-  const model = task.execution?.model || process.env.OPENAI_SWARM_MODEL || "gpt-5.2";
+-  const maxOutputTokens = parseClampedInt(process.env.OPENAI_SWARM_MAX_OUTPUT_TOKENS, 2200, 256, 8192);
+-  const oauthToken = process.env.OPENAI_OAUTH_ACCESS_TOKEN || "";
+-  const apiKey = process.env.OPENAI_API_KEY || "";
++    if (!oauthToken) {
++      throw new Error("OpenAI execution selected but neither OPENAI_API_KEY nor OPENAI_OAUTH_ACCESS_TOKEN is configured.");
++    }
+ 
+-  if (apiKey) {
+-    const client = new OpenAI({
+-      apiKey,
+-      baseURL: process.env.OPENAI_BASE_URL || undefined,
+-    });
+-    const response = await client.responses.create({
+-      model,
+-      input: task.prompt,
+-      max_output_tokens: maxOutputTokens,
+-      temperature: 0.2,
+-    });
+-    const text = extractModelOutputText(response) || "(empty response)";
++    const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
++    const response = await IOCoordinator.executeWithResilience(
++      'OpenAITaskFetch',
++      () => fetch(`${baseUrl}/responses`, {
++        method: "POST",
++        headers: {
++          "content-type": "application/json",
++          authorization: `Bearer ${oauthToken}`,
++        },
++        body: JSON.stringify({
++          model,
++          input: task.prompt,
++          max_output_tokens: maxOutputTokens,
++          temperature: 0.2,
++        }),
++      }),
++      { maxRetries: 3 }
++    );
++    if (!response.ok) {
++      throw new Error(`OpenAI OAuth request failed with ${response.status}`);
++    }
++    const json = (await response.json()) as unknown;
++    const text = extractModelOutputText(json) || "(empty response)";
+     await writeFile(task.outFile, text, "utf8");
+-    return;
++    return extractOpenAIUsage(json);
+   }
+ 
+-  if (!oauthToken) {
+-    throw new Error("OpenAI execution selected but neither OPENAI_API_KEY nor OPENAI_OAUTH_ACCESS_TOKEN is configured.");
++  function getGeminiTaskConfig(modelOverride?: string): GeminiResearchConfig {
++    const cfg = getGeminiConfig();
++    return {
++      providerEnabled: true,
++      model: modelOverride || process.env.GEMINI_SWARM_MODEL || cfg.model || "gemini-3-pro-preview",
++      apiKey: process.env.GEMINI_API_KEY || cfg.apiKey,
++      oauthToken: process.env.GOOGLE_OAUTH_ACCESS_TOKEN || cfg.oauthToken,
++      useAdc: process.env.GOOGLE_USE_ADC === "1" || cfg.useAdc,
++      baseUrl: process.env.GEMINI_BASE_URL || cfg.baseUrl,
++    };
+   }
+ 
+-  const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+-  const response = await fetch(`${baseUrl}/responses`, {
+-    method: "POST",
+-    headers: {
+-      "content-type": "application/json",
+-      authorization: `Bearer ${oauthToken}`,
+-    },
+-    body: JSON.stringify({
+-      model,
+-      input: task.prompt,
+-      max_output_tokens: maxOutputTokens,
+-      temperature: 0.2,
+-    }),
+-  });
+-  if (!response.ok) {
+-    throw new Error(`OpenAI OAuth request failed with ${response.status}`);
+-  }
+-  const json = (await response.json()) as unknown;
+-  const text = extractModelOutputText(json) || "(empty response)";
+-  await writeFile(task.outFile, text, "utf8");
+-}
++  async function runGeminiTask(task: AgentTask): Promise<TokenUsage> {
++    const cfg = getGeminiTaskConfig(task.execution?.model);
++    const body = {
++      contents: [
++        {
++          role: "user",
++          parts: [{ text: task.prompt }],
++        },
++      ],
++      generationConfig: {
++        temperature: 0.2,
++        maxOutputTokens: parseClampedInt(process.env.GEMINI_SWARM_MAX_OUTPUT_TOKENS, 2200, 256, 8192),
++      },
++    };
+ 
+-function getGeminiTaskConfig(modelOverride?: string): GeminiResearchConfig {
+-  const cfg = getGeminiConfig();
+-  return {
+-    providerEnabled: true,
+-    model: modelOverride || process.env.GEMINI_SWARM_MODEL || cfg.model || "gemini-3-pro-preview",
+-    apiKey: process.env.GEMINI_API_KEY || cfg.apiKey,
+-    oauthToken: process.env.GOOGLE_OAUTH_ACCESS_TOKEN || cfg.oauthToken,
+-    useAdc: process.env.GOOGLE_USE_ADC === "1" || cfg.useAdc,
+-    baseUrl: process.env.GEMINI_BASE_URL || cfg.baseUrl,
+-  };
+-}
++    let token: string | undefined = cfg.oauthToken;
++    if (!cfg.apiKey && !token && cfg.useAdc) {
++      token = (await getGoogleAccessTokenFromAdc(task.workspace)) || undefined;
++    }
++    if (!cfg.apiKey && !token) {
++      throw new Error(
++        "Gemini execution selected but neither GEMINI_API_KEY nor Google OAuth/ADC credentials are configured.",
++      );
++    }
+ 
+-async function runGeminiTask(task: AgentTask): Promise<void> {
+-  const cfg = getGeminiTaskConfig(task.execution?.model);
+-  const body = {
+-    contents: [
+-      {
+-        role: "user",
+-        parts: [{ text: task.prompt }],
+-      },
+-    ],
+-    generationConfig: {
+-      temperature: 0.2,
+-      maxOutputTokens: parseClampedInt(process.env.GEMINI_SWARM_MAX_OUTPUT_TOKENS, 2200, 256, 8192),
+-    },
+-  };
++    const endpoint = `${cfg.baseUrl}/models/${encodeURIComponent(cfg.model)}:generateContent`;
++    const url = cfg.apiKey ? `${endpoint}?key=${encodeURIComponent(cfg.apiKey)}` : endpoint;
++    const headers: Record<string, string> = {
++      "content-type": "application/json",
++    };
++    if (token) {
++      headers.authorization = `Bearer ${token}`;
++    }
+ 
+-  let token: string | undefined = cfg.oauthToken;
+-  if (!cfg.apiKey && !token && cfg.useAdc) {
+-    token = (await getGoogleAccessTokenFromAdc(task.workspace)) || undefined;
+-  }
+-  if (!cfg.apiKey && !token) {
+-    throw new Error(
+-      "Gemini execution selected but neither GEMINI_API_KEY nor Google OAuth/ADC credentials are configured.",
++    const response = await IOCoordinator.executeWithResilience(
++      'GeminiTaskFetch',
++      () => fetch(url, {
++        method: "POST",
++        headers,
++        body: JSON.stringify(body),
++      }),
++      { maxRetries: 3 }
+     );
++    if (!response.ok) {
++      throw new Error(`Gemini request failed with ${response.status}`);
++    }
++    const json = (await response.json()) as unknown;
++    const text = extractGeminiText(json) || "(empty response)";
++    await writeFile(task.outFile, text, "utf8");
++    return extractGeminiUsage(json);
+   }
+ 
+-  const endpoint = `${cfg.baseUrl}/models/${encodeURIComponent(cfg.model)}:generateContent`;
+-  const url = cfg.apiKey ? `${endpoint}?key=${encodeURIComponent(cfg.apiKey)}` : endpoint;
+-  const headers: Record<string, string> = {
+-    "content-type": "application/json",
+-  };
+-  if (token) {
+-    headers.authorization = `Bearer ${token}`;
++  function resolveGeminiCompatibleBaseUrl(): string | undefined {
++    if (process.env.GEMINI_OPENAI_BASE_URL) {
++      return process.env.GEMINI_OPENAI_BASE_URL;
++    }
++    const candidate = process.env.GEMINI_BASE_URL;
++    if (candidate && candidate.toLowerCase().includes("openai")) {
++      return candidate;
++    }
++    return undefined;
+   }
+ 
+-  const response = await fetch(url, {
+-    method: "POST",
+-    headers,
+-    body: JSON.stringify(body),
+-  });
+-  if (!response.ok) {
+-    throw new Error(`Gemini request failed with ${response.status}`);
+-  }
+-  const json = (await response.json()) as unknown;
+-  const text = extractGeminiText(json) || "(empty response)";
+-  await writeFile(task.outFile, text, "utf8");
+-}
++  function buildUnifiedProviderConfig(task: AgentTask, provider: Exclude<ProviderId, "codex">): UnifiedProviderConfig {
++    const modelOverride = task.execution?.model;
++    const maxTokens = parseClampedInt(
++      process.env.SWARM_PROVIDER_MAX_OUTPUT_TOKENS,
++      DEFAULT_PROVIDER_MAX_OUTPUT_TOKENS,
++      256,
++      16384,
++    );
+ 
+-function resolveGeminiCompatibleBaseUrl(): string | undefined {
+-  if (process.env.GEMINI_OPENAI_BASE_URL) {
+-    return process.env.GEMINI_OPENAI_BASE_URL;
+-  }
+-  const candidate = process.env.GEMINI_BASE_URL;
+-  if (candidate && candidate.toLowerCase().includes("openai")) {
+-    return candidate;
+-  }
+-  return undefined;
+-}
++    if (provider === "openai") {
++      return {
++        type: "openai",
++        model: modelOverride || process.env.OPENAI_SWARM_MODEL || process.env.OPENAI_MODEL || "gpt-4o",
++        apiKey: process.env.OPENAI_API_KEY,
++        baseUrl: process.env.OPENAI_BASE_URL,
++        maxTokens,
++        temperature: 0.2,
++      };
++    }
+ 
+-function buildUnifiedProviderConfig(task: AgentTask, provider: Exclude<ProviderId, "codex">): UnifiedProviderConfig {
+-  const modelOverride = task.execution?.model;
+-  const maxTokens = parseClampedInt(
+-    process.env.SWARM_PROVIDER_MAX_OUTPUT_TOKENS,
+-    DEFAULT_PROVIDER_MAX_OUTPUT_TOKENS,
+-    256,
+-    16384,
+-  );
++    if (provider === "gemini") {
++      return {
++        type: "gemini",
++        model: modelOverride || process.env.GEMINI_SWARM_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash",
++        apiKey: process.env.GEMINI_API_KEY,
++        baseUrl: resolveGeminiCompatibleBaseUrl(),
++        maxTokens,
++        temperature: 0.2,
++      };
++    }
++
++    if (provider === "anthropic") {
++      return {
++        type: "anthropic",
++        model: modelOverride || process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5",
++        apiKey: process.env.ANTHROPIC_API_KEY,
++        baseUrl: process.env.ANTHROPIC_BASE_URL,
++        maxTokens,
++        temperature: 0.2,
++      };
++    }
+ 
+-  if (provider === "openai") {
+     return {
+-      type: "openai",
+-      model: modelOverride || process.env.OPENAI_SWARM_MODEL || process.env.OPENAI_MODEL || "gpt-4o",
+-      apiKey: process.env.OPENAI_API_KEY,
+-      baseUrl: process.env.OPENAI_BASE_URL,
++      type: "ollama",
++      model: modelOverride || process.env.OLLAMA_MODEL || "llama3.2",
++      baseUrl: process.env.OLLAMA_HOST ?? process.env.OLLAMA_BASE_URL ?? "http://localhost:11434",
+       maxTokens,
+       temperature: 0.2,
+     };
+   }
+ 
+-  if (provider === "gemini") {
+-    return {
+-      type: "gemini",
+-      model: modelOverride || process.env.GEMINI_SWARM_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash",
+-      apiKey: process.env.GEMINI_API_KEY,
+-      baseUrl: resolveGeminiCompatibleBaseUrl(),
+-      maxTokens,
+-      temperature: 0.2,
+-    };
++  function getRegisteredToolDefinitions(): ProviderToolDefinition[] {
++    return [...defaultToolRegistry.values()].map((tool) => {
++      const properties: ProviderToolDefinition["parameters"]["properties"] = {};
++      for (const [name, prop] of Object.entries(tool.parameters.properties)) {
++        properties[name] = {
++          type: prop.type,
++          description: prop.description,
++          ...(prop.enum ? { enum: prop.enum } : {}),
++          ...(prop.items ? { items: prop.items } : {}),
++        };
++      }
++
++      return {
++        name: tool.name,
++        description: tool.description,
++        parameters: {
++          type: "object",
++          properties,
++          ...(tool.parameters.required ? { required: [...tool.parameters.required] } : {}),
++        },
++      };
++    });
++  }
++
++  function parseToolArguments(raw: string): Record<string, unknown> {
++    const parsed = safeJsonParse(raw);
++    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
++      return parsed as Record<string, unknown>;
++    }
++    return {};
+   }
+ 
+-  if (provider === "anthropic") {
++  function createToolContext(task: AgentTask): AgentToolContext {
++    const state = swarmStore.getState();
+     return {
+-      type: "anthropic",
+-      model: modelOverride || process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5",
+-      apiKey: process.env.ANTHROPIC_API_KEY,
+-      baseUrl: process.env.ANTHROPIC_BASE_URL,
+-      maxTokens,
+-      temperature: 0.2,
++      workspaceRoot: task.workspace,
++      agentId: task.agentId,
++      runId: state.runId || "standalone",
++      round: task.round,
++      allowedPaths: [task.workspace],
++      maxFileSize: parseClampedInt(process.env.SWARM_TOOL_MAX_FILE_SIZE, 800_000, 1024, 50_000_000),
++      shellTimeout: parseClampedInt(process.env.SWARM_TOOL_SHELL_TIMEOUT_MS, 20_000, 1000, 600_000),
+     };
+   }
+ 
+-  return {
+-    type: "ollama",
+-    model: modelOverride || process.env.OLLAMA_MODEL || "llama3.2",
+-    baseUrl: process.env.OLLAMA_HOST ?? process.env.OLLAMA_BASE_URL ?? "http://localhost:11434",
+-    maxTokens,
+-    temperature: 0.2,
+-  };
+-}
++  async function runUnifiedProviderTask(
++    task: AgentTask,
++    providerId: Exclude<ProviderId, "codex">,
++  ): Promise<TokenUsage> {
++    const provider = createProvider(buildUnifiedProviderConfig(task, providerId));
++    const enableTools = process.env.SWARM_ENABLE_TOOLS !== "0";
++    const toolDefinitions = enableTools ? getRegisteredToolDefinitions() : [];
++    const maxToolSteps = parseClampedInt(process.env.SWARM_TOOL_MAX_STEPS, DEFAULT_TOOL_MAX_STEPS, 1, 24);
++    const maxTokens = parseClampedInt(
++      process.env.SWARM_PROVIDER_MAX_OUTPUT_TOKENS,
++      DEFAULT_PROVIDER_MAX_OUTPUT_TOKENS,
++      256,
++      16384,
++    );
++
++    const messages: ProviderMessage[] = [{ role: "user", content: task.prompt }];
++    const toolContext = createToolContext(task);
++    let finalText = "";
++    let totalUsage = createTokenUsage();
++
++    for (let step = 0; step <= maxToolSteps; step++) {
++      // Trim context size down if needed via IO coordinator
++      const optimizedMessages = IOCoordinator.optimizeContext(messages, maxTokens);
++
++      // Wrap provider logic with exponential retry block
++      const completion = await IOCoordinator.executeWithResilience(
++        `UnifiedProvider(${providerId})`,
++        () => provider.complete({
++          messages: optimizedMessages as typeof messages,
++          tools: toolDefinitions.length ? toolDefinitions : undefined,
++          temperature: 0.2,
++          maxTokens,
++        }),
++        { maxRetries: 3 }
++      );
++
++      if (completion.content.trim()) {
++        finalText = completion.content;
++      }
++
++      if (completion.usage) {
++        totalUsage = addTokenUsage(totalUsage, normalizeTokenUsage({
++          inputTokens: completion.usage.inputTokens,
++          outputTokens: completion.usage.outputTokens,
++        }));
++      }
+ 
+-function getRegisteredToolDefinitions(): ProviderToolDefinition[] {
+-  return [...defaultToolRegistry.values()].map((tool) => {
+-    const properties: ProviderToolDefinition["parameters"]["properties"] = {};
+-    for (const [name, prop] of Object.entries(tool.parameters.properties)) {
+-      properties[name] = {
+-        type: prop.type,
+-        description: prop.description,
+-        ...(prop.enum ? { enum: prop.enum } : {}),
+-        ...(prop.items ? { items: prop.items } : {}),
++      const assistantMessage: ProviderMessage = {
++        role: "assistant",
++        content: completion.content,
++        ...(completion.toolCalls?.length ? { toolCalls: completion.toolCalls } : {}),
+       };
+-    }
++      messages.push(assistantMessage);
+ 
+-    return {
+-      name: tool.name,
+-      description: tool.description,
+-      parameters: {
+-        type: "object",
+-        properties,
+-        ...(tool.parameters.required ? { required: [...tool.parameters.required] } : {}),
+-      },
+-    };
+-  });
+-}
++      if (!completion.toolCalls?.length || !toolDefinitions.length) {
++        break;
++      }
+ 
+-function parseToolArguments(raw: string): Record<string, unknown> {
+-  const parsed = safeJsonParse(raw);
+-  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+-    return parsed as Record<string, unknown>;
+-  }
+-  return {};
+-}
++      if (step === maxToolSteps) {
++        throw new Error(`Tool loop limit reached (${maxToolSteps}) for ${task.agentId}.`);
++      }
+ 
+-function createToolContext(task: AgentTask): AgentToolContext {
+-  const state = swarmStore.getState();
+-  return {
+-    workspaceRoot: task.workspace,
+-    agentId: task.agentId,
+-    runId: state.runId || "standalone",
+-    round: task.round,
+-    allowedPaths: [task.workspace],
+-    maxFileSize: parseClampedInt(process.env.SWARM_TOOL_MAX_FILE_SIZE, 800_000, 1024, 50_000_000),
+-    shellTimeout: parseClampedInt(process.env.SWARM_TOOL_SHELL_TIMEOUT_MS, 20_000, 1000, 600_000),
+-  };
+-}
++      for (const toolCall of completion.toolCalls) {
++        swarmStore.appendEvent({
++          type: "agent.tool_call",
++          round: task.round,
++          agentId: task.agentId,
++          message: `${task.agentId} calling tool ${toolCall.name}.`,
++          metadata: { tool: toolCall.name, provider: providerId },
++        });
+ 
+-async function runUnifiedProviderTask(task: AgentTask, providerId: Exclude<ProviderId, "codex">): Promise<void> {
+-  const provider = createProvider(buildUnifiedProviderConfig(task, providerId));
+-  const enableTools = process.env.SWARM_ENABLE_TOOLS !== "0";
+-  const toolDefinitions = enableTools ? getRegisteredToolDefinitions() : [];
+-  const maxToolSteps = parseClampedInt(process.env.SWARM_TOOL_MAX_STEPS, DEFAULT_TOOL_MAX_STEPS, 1, 24);
+-  const maxTokens = parseClampedInt(
+-    process.env.SWARM_PROVIDER_MAX_OUTPUT_TOKENS,
+-    DEFAULT_PROVIDER_MAX_OUTPUT_TOKENS,
+-    256,
+-    16384,
+-  );
++        const args = parseToolArguments(toolCall.arguments);
++        const result = await executeToolCall(defaultToolRegistry, toolCall.name, args, toolContext);
++        const toolOutput = result.success ? result.output : `ERROR: ${result.error || result.output}`;
++        messages.push({
++          role: "tool",
++          name: toolCall.name,
++          toolCallId: toolCall.id,
++          content: toolOutput,
++        });
+ 
+-  const messages: ProviderMessage[] = [{ role: "user", content: task.prompt }];
+-  const toolContext = createToolContext(task);
+-  let finalText = "";
++        swarmStore.appendEvent({
++          type: "agent.tool_result",
++          round: task.round,
++          agentId: task.agentId,
++          level: result.success ? "info" : "warn",
++          message: `${toolCall.name} ${result.success ? "succeeded" : "failed"}.`,
++          metadata: {
++            tool: toolCall.name,
++            provider: providerId,
++            success: result.success,
++          },
++        });
++      }
++    }
+ 
+-  for (let step = 0; step <= maxToolSteps; step++) {
+-    const completion = await provider.complete({
+-      messages,
+-      tools: toolDefinitions.length ? toolDefinitions : undefined,
+-      temperature: 0.2,
+-      maxTokens,
+-    });
++    await writeFile(task.outFile, finalText.trim() ? finalText : "(empty response)", "utf8");
++    return totalUsage;
++  }
+ 
+-    if (completion.content.trim()) {
+-      finalText = completion.content;
++  async function runProviderTask(task: AgentTask): Promise<TokenUsage> {
++    const provider = task.execution?.provider || "codex";
++    if (provider === "codex") {
++      return runCodexTask(task);
+     }
+ 
+-    // ---- Symphony: token tracking per completion step ----
+-    if (completion.usage) {
+-      const sessionId = `${task.agentId}_r${task.round}`;
+-      tokenTracker.update(sessionId, {
+-        absolute: {
+-          inputTokens: completion.usage.inputTokens,
+-          outputTokens: completion.usage.outputTokens,
+-          totalTokens: completion.usage.inputTokens + completion.usage.outputTokens,
+-        },
+-      });
++    if (provider === "openai" && !process.env.OPENAI_API_KEY && process.env.OPENAI_OAUTH_ACCESS_TOKEN) {
++      return runOpenAITask(task);
+     }
+ 
+-    const assistantMessage: ProviderMessage = {
+-      role: "assistant",
+-      content: completion.content,
+-      ...(completion.toolCalls?.length ? { toolCalls: completion.toolCalls } : {}),
+-    };
+-    messages.push(assistantMessage);
++    if (provider === "gemini" && !process.env.GEMINI_API_KEY) {
++      return runGeminiTask(task);
++    }
+ 
+-    if (!completion.toolCalls?.length || !toolDefinitions.length) {
+-      break;
+-    }
+-
+-    if (step === maxToolSteps) {
+-      throw new Error(`Tool loop limit reached (${maxToolSteps}) for ${task.agentId}.`);
++    if (provider === "openai" || provider === "gemini" || provider === "anthropic" || provider === "ollama") {
++      return runUnifiedProviderTask(task, provider);
+     }
+ 
+-    for (const toolCall of completion.toolCalls) {
+-      swarmStore.appendEvent({
+-        type: "agent.tool_call",
+-        round: task.round,
+-        agentId: task.agentId,
+-        message: `${task.agentId} calling tool ${toolCall.name}.`,
+-        metadata: { tool: toolCall.name, provider: providerId },
+-      });
+-
+-      const args = parseToolArguments(toolCall.arguments);
+-      const result = await executeToolCall(defaultToolRegistry, toolCall.name, args, toolContext);
+-      const toolOutput = result.success ? result.output : `ERROR: ${result.error || result.output}`;
+-      messages.push({
+-        role: "tool",
+-        name: toolCall.name,
+-        toolCallId: toolCall.id,
+-        content: toolOutput,
+-      });
+-
+-      swarmStore.appendEvent({
+-        type: "agent.tool_result",
+-        round: task.round,
+-        agentId: task.agentId,
+-        level: result.success ? "info" : "warn",
+-        message: `${toolCall.name} ${result.success ? "succeeded" : "failed"}.`,
+-        metadata: {
+-          tool: toolCall.name,
+-          provider: providerId,
+-          success: result.success,
+-        },
+-      });
+-    }
++    return runCodexTask(task);
+   }
+ 
+-  await writeFile(task.outFile, finalText.trim() ? finalText : "(empty response)", "utf8");
+-}
+-
+-async function runProviderTask(task: AgentTask): Promise<void> {
+-  const provider = task.execution?.provider || "codex";
+-  if (provider === "codex") {
+-    await runCodexTask(task);
+-    return;
+-  }
+-
+-  if (provider === "openai" && !process.env.OPENAI_API_KEY && process.env.OPENAI_OAUTH_ACCESS_TOKEN) {
+-    await runOpenAITask(task);
+-    return;
+-  }
+-
+-  if (provider === "gemini" && !process.env.GEMINI_API_KEY) {
+-    await runGeminiTask(task);
+-    return;
++  function demoOutput(agentId: AgentId, round: number): string {
++    if (agentId === "research") {
++      return "1) SEARCH_SCOPE:\n- local docs + runtime\n- external web adapter (demo)\n\n2) KEY_TERMS:\n- orchestration, checkpoint, rewind\n\n3) MATCHED_EVIDENCE:\n- enforce lint/checkpoint loops\n\n4) WEB_SOURCES (RANKED):\n- [1] score=2.10 | docs.example.com | Example guidance | https://docs.example.com\n\n5) GEMINI_INSIGHTS:\n- include changed files and rewind path";
++    }
++    if (agentId === "worker1") {
++      return `1) PLAN:\n- Implement round ${round}\n\n2) CHANGES:\n- lib/swarm/engine.ts: updates\n\n3) VALIDATION:\n- npm run build (0)\n\n4) RESULTS:\n- pass\n\n5) RISKS:\n- demo`;
++    }
++    if (agentId === "worker2") {
++      const decision = round >= 2 ? "APPROVE" : "REJECT";
++      return `1) COVERAGE TABLE:\n- checked\n\n2) DEFECTS:\n- ${decision === "APPROVE" ? "none" : "[MED] sample defect"}\n\n3) PERFORMANCE CHECK:\n- none\n\n4) DECISION: ${decision}`;
++    }
++    if (agentId === "evaluator") {
++      const status = round >= 2 ? "PASS" : "FAIL";
++      return `1) STATUS: ${status}\n\n2) FINDINGS:\n- sample\n\n3) PROMPT_UPDATES_W1:\n- sample\n\n4) PROMPT_UPDATES_W2:\n- sample\n\n5) COORDINATION_RULES:\n- sample`;
++    }
++    return `1) STATUS: ${round >= 2 ? "PASS" : "REVISE"}\n\n2) MERGED_RESULT: sample\n\n3) NEXT_ACTIONS:\n1. sample\n\n4) RISKS:\n- None`;
+   }
+ 
+-  if (provider === "openai" || provider === "gemini" || provider === "anthropic" || provider === "ollama") {
+-    await runUnifiedProviderTask(task, provider);
+-    return;
++  async function runDemoTask(task: AgentTask): Promise<TokenUsage> {
++    await new Promise((resolve) => setTimeout(resolve, 500 + Math.floor(Math.random() * 500)));
++    await writeFile(task.outFile, demoOutput(task.agentId, task.round), "utf8");
++    return createTokenUsage();
+   }
+ 
+-  await runCodexTask(task);
+-}
+-
+-function demoOutput(agentId: AgentId, round: number): string {
+-  if (agentId === "research") {
+-    return "1) SEARCH_SCOPE:\n- local docs + runtime\n- external web adapter (demo)\n\n2) KEY_TERMS:\n- orchestration, checkpoint, rewind\n\n3) MATCHED_EVIDENCE:\n- enforce lint/checkpoint loops\n\n4) WEB_SOURCES (RANKED):\n- [1] score=2.10 | docs.example.com | Example guidance | https://docs.example.com\n\n5) GEMINI_INSIGHTS:\n- include changed files and rewind path";
+-  }
+-  if (agentId === "worker1") {
+-    return `1) PLAN:\n- Implement round ${round}\n\n2) CHANGES:\n- lib/swarm/engine.ts: updates\n\n3) VALIDATION:\n- npm run build (0)\n\n4) RESULTS:\n- pass\n\n5) RISKS:\n- demo`;
+-  }
+-  if (agentId === "worker2") {
+-    const decision = round >= 2 ? "APPROVE" : "REJECT";
+-    return `1) COVERAGE TABLE:\n- checked\n\n2) DEFECTS:\n- ${decision === "APPROVE" ? "none" : "[MED] sample defect"}\n\n3) PERFORMANCE CHECK:\n- none\n\n4) DECISION: ${decision}`;
+-  }
+-  if (agentId === "evaluator") {
+-    const status = round >= 2 ? "PASS" : "FAIL";
+-    return `1) STATUS: ${status}\n\n2) FINDINGS:\n- sample\n\n3) PROMPT_UPDATES_W1:\n- sample\n\n4) PROMPT_UPDATES_W2:\n- sample\n\n5) COORDINATION_RULES:\n- sample`;
+-  }
+-  return `1) STATUS: ${round >= 2 ? "PASS" : "REVISE"}\n\n2) MERGED_RESULT: sample\n\n3) NEXT_ACTIONS:\n1. sample\n\n4) RISKS:\n- None`;
+-}
+-
+-async function runDemoTask(task: AgentTask): Promise<void> {
+-  await new Promise((resolve) => setTimeout(resolve, 500 + Math.floor(Math.random() * 500)));
+-  await writeFile(task.outFile, demoOutput(task.agentId, task.round), "utf8");
+-}
+-
+-async function runAgentTask(task: AgentTask): Promise<AgentTaskResult> {
+-  // ---- Symphony: workspace safety check ----
+-  // Validate that the task workspace is inside the project root before dispatching.
+-  try {
+-    WorkspaceManager.validateProjectPath(task.workspace);
+-  } catch (err) {
+-    const safetyMsg = err instanceof Error ? err.message : String(err);
+-    swarmStore.appendEvent({
+-      type: "agent.safety",
+-      round: task.round,
+-      agentId: task.agentId,
+-      level: "error",
+-      message: `Workspace safety violation: ${safetyMsg}`,
+-    });
+-    const digest = hashText(safetyMsg);
+-    return { text: `ERROR: ${safetyMsg}`, outFile: task.outFile, sha256: digest, failed: true };
+-  }
+-
+-  swarmStore.setAgentState(task.agentId, {
+-    phase: "running",
+-    round: task.round,
+-    startedAt: nowIso(),
+-    endedAt: undefined,
+-    outputFile: normalizeRel(path.relative(PROJECT_ROOT, task.outFile)),
+-    excerpt: undefined,
+-    taskTarget: task.target,
+-  });
+-  swarmStore.appendEvent({
+-    type: "agent.started",
+-    round: task.round,
+-    agentId: task.agentId,
+-    message: `${task.agentId} started.`,
+-    metadata: task.execution
+-      ? { provider: task.execution.provider, model: task.execution.model || "(default)" }
+-      : undefined,
+-  });
+-  await appendMessage(
+-    task.roundDir,
+-    message({
+-      round: task.round,
+-      from: "system",
+-      to: task.agentId,
+-      type: "task",
+-      summary: `Execute ${task.agentId} in round ${task.round}.`,
+-    }),
+-  );
+-
+-  setPda(task.agentId, task.round, "perceive");
+-  setPda(task.agentId, task.round, "decide");
+-  setPda(task.agentId, task.round, "act");
+-
+-  try {
+-    await maybeRequireApprovalBeforeAct(task.round, task.agentId);
+-    await waitIfPaused(task.round, `${task.agentId}-act`);
+-
+-    // ---- Symphony: stall detection — wrap execution with a timeout race ----
+-    const execution = task.mode === "demo" ? runDemoTask(task) : runProviderTask(task);
+-    await Promise.race([
+-      execution,
+-      new Promise<never>((_, reject) =>
+-        setTimeout(() => {
+-          swarmStore.appendEvent({
+-            type: "agent.stalled",
+-            round: task.round,
+-            agentId: task.agentId,
+-            level: "warn",
+-            message: `${task.agentId} stalled after ${STALL_TIMEOUT_MS}ms with no output; aborting.`,
+-            metadata: { stallTimeoutMs: STALL_TIMEOUT_MS },
+-          });
+-          reject(new Error(`Agent ${task.agentId} stalled after ${STALL_TIMEOUT_MS}ms`));
+-        }, STALL_TIMEOUT_MS),
+-      ),
+-    ]);
+-
+-    const text = await readFile(task.outFile, "utf8");
+-    const digest = hashText(text);
+-    const excerpt = summarizeOutput(text);
+-
+-    swarmStore.setAgentState(task.agentId, {
+-      phase: "completed",
+-      endedAt: nowIso(),
+-      excerpt,
+-      pdaStage: "act",
+-    });
+-    swarmStore.appendEvent({
+-      type: "agent.finished",
+-      round: task.round,
+-      agentId: task.agentId,
+-      message: `${task.agentId} finished.`,
+-      metadata: { sha256: digest },
+-    });
+-
+-    for (const issue of verifyOutputSafety(text)) {
++  async function runAgentTask(task: AgentTask): Promise<AgentTaskResult> {
++    try {
++      await _workspaceManager.assertPathContained(task.workspace, { allowRoot: true });
++    } catch (err) {
++      const safetyMsg = err instanceof Error ? err.message : String(err);
+       swarmStore.appendEvent({
+         type: "agent.safety",
+         round: task.round,
+         agentId: task.agentId,
+-        level: "warn",
+-        message: issue,
++        level: "error",
++        message: `Workspace safety violation: ${safetyMsg}`,
+       });
++      const digest = hashText(safetyMsg);
++      return { text: `ERROR: ${safetyMsg}`, outFile: task.outFile, sha256: digest, failed: true };
+     }
+ 
+-    await appendMessage(
+-      task.roundDir,
+-      message({
+-        round: task.round,
+-        from: task.agentId,
+-        to: task.target,
+-        type: "result",
+-        summary: excerpt || `${task.agentId} completed`,
+-        artifactPath: normalizeRel(path.relative(PROJECT_ROOT, task.outFile)),
+-        sha256: digest,
+-      }),
+-    );
+-    return { text, outFile: task.outFile, sha256: digest, failed: false };
+-  } catch (error) {
+-    const msg = error instanceof Error ? error.message : String(error);
+-    await writeFile(task.outFile, `ERROR: ${msg}`, "utf8");
+-    const digest = hashText(`ERROR: ${msg}`);
+     swarmStore.setAgentState(task.agentId, {
+-      phase: "failed",
+-      endedAt: nowIso(),
+-      excerpt: msg.slice(0, 260),
+-      pdaStage: "act",
++      phase: "running",
++      round: task.round,
++      startedAt: nowIso(),
++      endedAt: undefined,
++      outputFile: normalizeRel(path.relative(PROJECT_ROOT, task.outFile)),
++      excerpt: undefined,
++      taskTarget: task.target,
+     });
+     swarmStore.appendEvent({
+-      type: "agent.failed",
++      type: "agent.started",
+       round: task.round,
+       agentId: task.agentId,
+-      level: "error",
+-      message: msg,
++      message: `${task.agentId} started.`,
++      metadata: task.execution
++        ? { provider: task.execution.provider, model: task.execution.model || "(default)" }
++        : undefined,
+     });
+     await appendMessage(
+       task.roundDir,
+       message({
+         round: task.round,
+-        from: task.agentId,
+-        to: task.target,
+-        type: "error",
+-        summary: msg.slice(0, 220),
+-        artifactPath: normalizeRel(path.relative(PROJECT_ROOT, task.outFile)),
+-        sha256: digest,
++        from: "system",
++        to: task.agentId,
++        type: "task",
++        summary: `Execute ${task.agentId} in round ${task.round}.`,
+       }),
+     );
+-    return { text: `ERROR: ${msg}`, outFile: task.outFile, sha256: digest, failed: true };
++
++    setPda(task.agentId, task.round, "perceive");
++    setPda(task.agentId, task.round, "decide");
++    setPda(task.agentId, task.round, "act");
++
++    try {
++      await maybeRequireApprovalBeforeAct(task.round, task.agentId);
++      await waitIfPaused(task.round, `${task.agentId}-act`);
++
++      const execution = task.mode === "demo" ? runDemoTask(task) : runProviderTask(task);
++      const usage = await runWithStallTimeout(execution, STALL_TIMEOUT_MS, () => {
++        swarmStore.appendEvent({
++          type: "agent.stalled",
++          round: task.round,
++          agentId: task.agentId,
++          level: "warn",
++          message: `${task.agentId} stalled after ${STALL_TIMEOUT_MS}ms with no output; aborting.`,
++          metadata: { stallTimeoutMs: STALL_TIMEOUT_MS },
++        });
++      });
++
++      const text = await readFile(task.outFile, "utf8");
++      const digest = hashText(text);
++      const excerpt = summarizeOutput(text);
++      const sessionTotals = tokenTracker.recordDelta(createTaskTokenSessionId(task), usage);
++
++      swarmStore.setAgentState(task.agentId, {
++        phase: "completed",
++        endedAt: nowIso(),
++        excerpt,
++        pdaStage: "act",
++      });
++      swarmStore.appendEvent({
++        type: "agent.finished",
++        round: task.round,
++        agentId: task.agentId,
++        message: `${task.agentId} finished.`,
++        metadata: {
++          sha256: digest,
++          tokenUsage: usage,
++          sessionTotals,
++        },
++      });
++
++      for (const issue of verifyOutputSafety(text)) {
++        swarmStore.appendEvent({
++          type: "agent.safety",
++          round: task.round,
++          agentId: task.agentId,
++          level: "warn",
++          message: issue,
++        });
++      }
++
++      await appendMessage(
++        task.roundDir,
++        message({
++          round: task.round,
++          from: task.agentId,
++          to: task.target,
++          type: "result",
++          summary: excerpt || `${task.agentId} completed`,
++          artifactPath: normalizeRel(path.relative(PROJECT_ROOT, task.outFile)),
++          sha256: digest,
++        }),
++      );
++      return { text, outFile: task.outFile, sha256: digest, failed: false };
++    } catch (error) {
++      const msg = error instanceof Error ? error.message : String(error);
++      await writeFile(task.outFile, `ERROR: ${msg}`, "utf8");
++      const digest = hashText(`ERROR: ${msg}`);
++      swarmStore.setAgentState(task.agentId, {
++        phase: "failed",
++        endedAt: nowIso(),
++        excerpt: msg.slice(0, 260),
++        pdaStage: "act",
++      });
++      swarmStore.appendEvent({
++        type: "agent.failed",
++        round: task.round,
++        agentId: task.agentId,
++        level: "error",
++        message: msg,
++      });
++      await appendMessage(
++        task.roundDir,
++        message({
++          round: task.round,
++          from: task.agentId,
++          to: task.target,
++          type: "error",
++          summary: msg.slice(0, 220),
++          artifactPath: normalizeRel(path.relative(PROJECT_ROOT, task.outFile)),
++          sha256: digest,
++        }),
++      );
++      return { text: `ERROR: ${msg}`, outFile: task.outFile, sha256: digest, failed: true };
++    }
+   }
+-}
+-async function runResearch(
+-  round: number,
+-  workspace: string,
+-  mode: RunMode,
+-  roundDir: string,
+-  seed: string,
+-  execution?: RoleExecutionPreference,
+-): Promise<AgentTaskResult> {
+-  const outFile = path.join(roundDir, "research.md");
+-  swarmStore.setAgentState("research", {
+-    phase: "running",
+-    round,
+-    startedAt: nowIso(),
+-    endedAt: undefined,
+-    outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
+-    excerpt: undefined,
+-    taskTarget: "broadcast",
+-  });
+-  swarmStore.appendEvent({
+-    type: "agent.started",
+-    round,
+-    agentId: "research",
+-    message: "research started.",
+-  });
+-  await appendMessage(
+-    roundDir,
+-    message({
+-      round,
+-      from: "system",
+-      to: "research",
+-      type: "task",
+-      summary: "Collect local architectural and implementation context.",
+-    }),
+-  );
+-  setPda("research", round, "perceive");
+-  setPda("research", round, "decide");
+-  setPda("research", round, "act");
+-  await maybeRequireApprovalBeforeAct(round, "research");
+-  await waitIfPaused(round, "research-act");
+-
+-  if (mode === "demo") {
+-    await writeFile(outFile, demoOutput("research", round), "utf8");
+-    const txt = await readFile(outFile, "utf8");
+-    const digest = hashText(txt);
++  async function runResearch(
++    round: number,
++    workspace: string,
++    mode: RunMode,
++    roundDir: string,
++    seed: string,
++    execution?: RoleExecutionPreference,
++  ): Promise<AgentTaskResult> {
++    const outFile = path.join(roundDir, "research.md");
+     swarmStore.setAgentState("research", {
+-      phase: "completed",
++      phase: "running",
+       round,
+-      endedAt: nowIso(),
++      startedAt: nowIso(),
++      endedAt: undefined,
+       outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
+-      excerpt: summarizeOutput(txt),
+-      pdaStage: "act",
++      excerpt: undefined,
+       taskTarget: "broadcast",
+     });
+     swarmStore.appendEvent({
+-      type: "agent.finished",
++      type: "agent.started",
+       round,
+       agentId: "research",
+-      message: "research finished.",
+-      metadata: { sha256: digest },
++      message: "research started.",
+     });
+     await appendMessage(
+       roundDir,
+       message({
+         round,
+-        from: "research",
+-        to: "broadcast",
+-        type: "feedback",
+-        summary: summarizeOutput(txt),
+-        artifactPath: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
+-        sha256: digest,
++        from: "system",
++        to: "research",
++        type: "task",
++        summary: "Collect local architectural and implementation context.",
+       }),
+     );
+-    return { text: txt, outFile, sha256: digest, failed: false };
+-  }
+-
+-  const terms = extractSearchTerms(seed, []).slice(0, 6);
+-  const pattern =
+-    terms.length > 0
+-      ? terms.join("|")
+-      : "coordinator|evaluator|worker|lint|checkpoint|rewind|selector|context";
+-  let lines: string[] = [];
+-  try {
+-    const result = await runProcess(
+-      "rg",
+-      [
+-        "-n",
+-        "--max-count",
+-        "60",
+-        "--glob",
+-        "!node_modules/**",
+-        "--glob",
+-        "!.next/**",
+-        "--glob",
+-        "!runs/**",
+-        pattern,
+-        "AGENTS_ARCHITECTURE.md",
+-        "AGENTS_KNOWLEDGE.md",
+-        "AGENTS_ROADMAP.md",
+-        "DEPENDENCIES.md",
+-        "lib",
+-        "app",
+-        "prompts",
+-      ],
+-      { cwd: workspace },
+-    );
+-    lines = result.stdout.split(/\r?\n/).filter(Boolean).slice(0, 25);
+-  } catch {
+-    lines = ["Research fallback: `rg` was not available in this environment."];
+-  }
+-  const webCfg = getWebSearchConfig();
+-  let webSources: WebSearchHit[] = [];
+-  if (webCfg.enabled) {
+-    try {
+-      webSources = await runExternalWebResearch(round, seed, lines, webCfg);
+-    } catch (error) {
++    setPda("research", round, "perceive");
++    setPda("research", round, "decide");
++    setPda("research", round, "act");
++    await maybeRequireApprovalBeforeAct(round, "research");
++    await waitIfPaused(round, "research-act");
++
++    if (mode === "demo") {
++      await writeFile(outFile, demoOutput("research", round), "utf8");
++      const txt = await readFile(outFile, "utf8");
++      const digest = hashText(txt);
++      swarmStore.setAgentState("research", {
++        phase: "completed",
++        round,
++        endedAt: nowIso(),
++        outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
++        excerpt: summarizeOutput(txt),
++        pdaStage: "act",
++        taskTarget: "broadcast",
++      });
+       swarmStore.appendEvent({
+-        type: "research.web",
++        type: "agent.finished",
+         round,
+         agentId: "research",
+-        level: "warn",
+-        message: error instanceof Error ? error.message : String(error),
+-        metadata: { provider: webCfg.provider },
++        message: "research finished.",
++        metadata: { sha256: digest },
+       });
++      await appendMessage(
++        roundDir,
++        message({
++          round,
++          from: "research",
++          to: "broadcast",
++          type: "feedback",
++          summary: summarizeOutput(txt),
++          artifactPath: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
++          sha256: digest,
++        }),
++      );
++      return { text: txt, outFile, sha256: digest, failed: false };
+     }
+-  }
+ 
+-  const providerSignals = [
+-    ...lines,
+-    ...webSources
+-      .slice(0, 8)
+-      .map((source) => `${source.title} | ${source.domain || "(unknown)"} | ${source.url}`),
+-  ];
+-  const researchProvider = execution?.provider || "gemini";
+-  const researchModel = execution?.model;
+-  let providerInsight: string | null = null;
+-  try {
+-    if (researchProvider === "openai") {
+-      providerInsight = await runOpenAIResearch(round, seed, providerSignals, researchModel);
+-    } else if (researchProvider === "gemini") {
+-      providerInsight = await runGeminiResearch(workspace, round, seed, providerSignals, researchModel);
++    const terms = extractSearchTerms(seed, []).slice(0, 6);
++    const pattern =
++      terms.length > 0
++        ? terms.join("|")
++        : "coordinator|evaluator|worker|lint|checkpoint|rewind|selector|context";
++    let lines: string[] = [];
++    try {
++      const result = await runProcess(
++        "rg",
++        [
++          "-n",
++          "--max-count",
++          "60",
++          "--glob",
++          "!node_modules/**",
++          "--glob",
++          "!.next/**",
++          "--glob",
++          "!runs/**",
++          pattern,
++          "AGENTS_ARCHITECTURE.md",
++          "AGENTS_KNOWLEDGE.md",
++          "AGENTS_ROADMAP.md",
++          "DEPENDENCIES.md",
++          "lib",
++          "app",
++          "prompts",
++        ],
++        { cwd: workspace },
++      );
++      lines = result.stdout.split(/\r?\n/).filter(Boolean).slice(0, 25);
++    } catch {
++      lines = ["Research fallback: `rg` was not available in this environment."];
+     }
+-    if (providerInsight) {
++    const webCfg = getWebSearchConfig();
++    let webSources: WebSearchHit[] = [];
++    if (webCfg.enabled) {
++      try {
++        webSources = await runExternalWebResearch(round, seed, lines, webCfg);
++      } catch (error) {
++        swarmStore.appendEvent({
++          type: "research.web",
++          round,
++          agentId: "research",
++          level: "warn",
++          message: error instanceof Error ? error.message : String(error),
++          metadata: { provider: webCfg.provider },
++        });
++      }
++    }
++
++    const providerSignals = [
++      ...lines,
++      ...webSources
++        .slice(0, 8)
++        .map((source) => `${source.title} | ${source.domain || "(unknown)"} | ${source.url}`),
++    ];
++    const researchProvider = execution?.provider || "gemini";
++    const researchModel = execution?.model;
++    let providerInsight: string | null = null;
++    try {
++      if (researchProvider === "openai") {
++        providerInsight = await runOpenAIResearch(round, seed, providerSignals, researchModel);
++      } else if (researchProvider === "gemini") {
++        providerInsight = await runGeminiResearch(workspace, round, seed, providerSignals, researchModel);
++      }
++      if (providerInsight) {
++        swarmStore.appendEvent({
++          type: "research.provider",
++          round,
++          agentId: "research",
++          message: `${researchProvider} research provider produced supplemental insights.`,
++          metadata: { provider: researchProvider, model: researchModel || "(default)" },
++        });
++      }
++    } catch (error) {
+       swarmStore.appendEvent({
+         type: "research.provider",
+         round,
+         agentId: "research",
+-        message: `${researchProvider} research provider produced supplemental insights.`,
++        level: "warn",
++        message: error instanceof Error ? error.message : String(error),
+         metadata: { provider: researchProvider, model: researchModel || "(default)" },
+       });
+     }
+-  } catch (error) {
++
++    const textLines = [
++      "1) SEARCH_SCOPE:",
++      "- local docs + runtime",
++      ...(webCfg.enabled ? [`- external web adapter (${webCfg.provider})`] : []),
++      "",
++      "2) KEY_TERMS:",
++      terms.length ? `- ${terms.join(", ")}` : "- default terms",
++      "",
++      "3) MATCHED_EVIDENCE:",
++      ...(lines.length ? lines.map((line) => `- ${line}`) : ["- no matches"]),
++    ];
++    if (webCfg.enabled) {
++      textLines.push("", "4) WEB_SOURCES (RANKED):");
++      if (webSources.length) {
++        for (const [index, source] of webSources.entries()) {
++          textLines.push(
++            `- [${index + 1}] score=${source.score.toFixed(2)} | ${source.domain || "(unknown)"} | ${source.title} | ${source.url}`,
++          );
++          if (source.snippet) {
++            textLines.push(`- snippet: ${source.snippet.slice(0, 180)}`);
++          }
++          if (source.reasons.length) {
++            textLines.push(`- rank_factors: ${source.reasons.join("; ")}`);
++          }
++        }
++      } else {
++        textLines.push("- none");
++      }
++    }
++    if (providerInsight) {
++      textLines.push("", webCfg.enabled ? "5) MODEL_PROVIDER_INSIGHTS:" : "4) MODEL_PROVIDER_INSIGHTS:");
++      textLines.push(`- provider: ${researchProvider}`);
++      textLines.push(`- model: ${researchModel || "(default)"}`);
++      for (const line of providerInsight.split(/\r?\n/).slice(0, 20)) {
++        const trimmed = line.trim();
++        if (trimmed) {
++          textLines.push(`- ${trimmed.replace(/^-+\s*/, "")}`);
++        }
++      }
++    }
++    const text = textLines.join("\n");
++    await writeFile(outFile, text, "utf8");
++    const digest = hashText(text);
++    swarmStore.setAgentState("research", {
++      phase: "completed",
++      round,
++      endedAt: nowIso(),
++      outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
++      excerpt: summarizeOutput(text),
++      pdaStage: "act",
++      taskTarget: "broadcast",
++    });
+     swarmStore.appendEvent({
+-      type: "research.provider",
++      type: "agent.finished",
+       round,
+       agentId: "research",
+-      level: "warn",
+-      message: error instanceof Error ? error.message : String(error),
+-      metadata: { provider: researchProvider, model: researchModel || "(default)" },
++      message: "research finished.",
++      metadata: { sha256: digest },
+     });
++    await appendMessage(
++      roundDir,
++      message({
++        round,
++        from: "research",
++        to: "broadcast",
++        type: "feedback",
++        summary: summarizeOutput(text),
++        artifactPath: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
++        sha256: digest,
++      }),
++    );
++    return { text, outFile, sha256: digest, failed: false };
+   }
+ 
+-  const textLines = [
+-    "1) SEARCH_SCOPE:",
+-    "- local docs + runtime",
+-    ...(webCfg.enabled ? [`- external web adapter (${webCfg.provider})`] : []),
+-    "",
+-    "2) KEY_TERMS:",
+-    terms.length ? `- ${terms.join(", ")}` : "- default terms",
+-    "",
+-    "3) MATCHED_EVIDENCE:",
+-    ...(lines.length ? lines.map((line) => `- ${line}`) : ["- no matches"]),
+-  ];
+-  if (webCfg.enabled) {
+-    textLines.push("", "4) WEB_SOURCES (RANKED):");
+-    if (webSources.length) {
+-      for (const [index, source] of webSources.entries()) {
+-        textLines.push(
+-          `- [${index + 1}] score=${source.score.toFixed(2)} | ${source.domain || "(unknown)"} | ${source.title} | ${source.url}`,
+-        );
+-        if (source.snippet) {
+-          textLines.push(`- snippet: ${source.snippet.slice(0, 180)}`);
+-        }
+-        if (source.reasons.length) {
+-          textLines.push(`- rank_factors: ${source.reasons.join("; ")}`);
+-        }
++  async function hashFile(filePath: string): Promise<string> {
++    const data = await readFile(filePath);
++    return createHash("sha256").update(data).digest("hex");
++  }
++
++  async function collectFromDir(rootAbs: string, relRoot: string, map: Map<string, string>): Promise<void> {
++    const entries = await readdir(rootAbs, { withFileTypes: true });
++    for (const entry of entries) {
++      if (entry.name === "node_modules" || entry.name === ".next" || entry.name === "runs") {
++        continue;
+       }
+-    } else {
+-      textLines.push("- none");
+-    }
+-  }
+-  if (providerInsight) {
+-    textLines.push("", webCfg.enabled ? "5) MODEL_PROVIDER_INSIGHTS:" : "4) MODEL_PROVIDER_INSIGHTS:");
+-    textLines.push(`- provider: ${researchProvider}`);
+-    textLines.push(`- model: ${researchModel || "(default)"}`);
+-    for (const line of providerInsight.split(/\r?\n/).slice(0, 20)) {
+-      const trimmed = line.trim();
+-      if (trimmed) {
+-        textLines.push(`- ${trimmed.replace(/^-+\s*/, "")}`);
++      const abs = path.join(rootAbs, entry.name);
++      const rel = normalizeRel(path.join(relRoot, entry.name));
++      if (entry.isDirectory()) {
++        await collectFromDir(abs, rel, map);
++        continue;
++      }
++      if (entry.isFile()) {
++        map.set(rel, await hashFile(abs));
+       }
+     }
+   }
+-  const text = textLines.join("\n");
+-  await writeFile(outFile, text, "utf8");
+-  const digest = hashText(text);
+-  swarmStore.setAgentState("research", {
+-    phase: "completed",
+-    round,
+-    endedAt: nowIso(),
+-    outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
+-    excerpt: summarizeOutput(text),
+-    pdaStage: "act",
+-    taskTarget: "broadcast",
+-  });
+-  swarmStore.appendEvent({
+-    type: "agent.finished",
+-    round,
+-    agentId: "research",
+-    message: "research finished.",
+-    metadata: { sha256: digest },
+-  });
+-  await appendMessage(
+-    roundDir,
+-    message({
+-      round,
+-      from: "research",
+-      to: "broadcast",
+-      type: "feedback",
+-      summary: summarizeOutput(text),
+-      artifactPath: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
+-      sha256: digest,
+-    }),
+-  );
+-  return { text, outFile, sha256: digest, failed: false };
+-}
+ 
+-async function hashFile(filePath: string): Promise<string> {
+-  const data = await readFile(filePath);
+-  return createHash("sha256").update(data).digest("hex");
+-}
+-
+-async function collectFromDir(rootAbs: string, relRoot: string, map: Map<string, string>): Promise<void> {
+-  const entries = await readdir(rootAbs, { withFileTypes: true });
+-  for (const entry of entries) {
+-    if (entry.name === "node_modules" || entry.name === ".next" || entry.name === "runs") {
+-      continue;
+-    }
+-    const abs = path.join(rootAbs, entry.name);
+-    const rel = normalizeRel(path.join(relRoot, entry.name));
+-    if (entry.isDirectory()) {
+-      await collectFromDir(abs, rel, map);
+-      continue;
+-    }
+-    if (entry.isFile()) {
+-      map.set(rel, await hashFile(abs));
++  async function collectFingerprints(workspace: string): Promise<Map<string, string>> {
++    const map = new Map<string, string>();
++    for (const target of CHECKPOINT_TARGETS) {
++      const abs = path.join(workspace, target);
++      if (!(await pathExists(abs))) {
++        continue;
++      }
++      const st = await stat(abs);
++      if (st.isDirectory()) {
++        await collectFromDir(abs, target, map);
++      } else if (st.isFile()) {
++        map.set(normalizeRel(target), await hashFile(abs));
++      }
+     }
++    return map;
+   }
+-}
+ 
+-async function collectFingerprints(workspace: string): Promise<Map<string, string>> {
+-  const map = new Map<string, string>();
+-  for (const target of CHECKPOINT_TARGETS) {
+-    const abs = path.join(workspace, target);
+-    if (!(await pathExists(abs))) {
+-      continue;
++  function diffFingerprints(before: Map<string, string>, after: Map<string, string>): string[] {
++    const changed = new Set<string>();
++    for (const [file, hash] of before.entries()) {
++      if (!after.has(file) || after.get(file) !== hash) {
++        changed.add(file);
++      }
+     }
+-    const st = await stat(abs);
+-    if (st.isDirectory()) {
+-      await collectFromDir(abs, target, map);
+-    } else if (st.isFile()) {
+-      map.set(normalizeRel(target), await hashFile(abs));
++    for (const file of after.keys()) {
++      if (!before.has(file)) {
++        changed.add(file);
++      }
+     }
++    return [...changed].sort();
+   }
+-  return map;
+-}
+ 
+-function diffFingerprints(before: Map<string, string>, after: Map<string, string>): string[] {
+-  const changed = new Set<string>();
+-  for (const [file, hash] of before.entries()) {
+-    if (!after.has(file) || after.get(file) !== hash) {
+-      changed.add(file);
+-    }
+-  }
+-  for (const file of after.keys()) {
+-    if (!before.has(file)) {
+-      changed.add(file);
+-    }
+-  }
+-  return [...changed].sort();
+-}
++  async function createCheckpoint(round: number, workspace: string): Promise<CheckpointInfo> {
++    await mkdir(CHECKPOINTS_DIR, { recursive: true });
++    const dir = path.join(CHECKPOINTS_DIR, `round-${round}`);
++    await rm(dir, { recursive: true, force: true });
++    await mkdir(dir, { recursive: true });
+ 
+-async function createCheckpoint(round: number, workspace: string): Promise<CheckpointInfo> {
+-  await mkdir(CHECKPOINTS_DIR, { recursive: true });
+-  const dir = path.join(CHECKPOINTS_DIR, `round-${round}`);
+-  await rm(dir, { recursive: true, force: true });
+-  await mkdir(dir, { recursive: true });
+-
+-  const manifest: CheckpointManifest = { round, createdAt: nowIso(), entries: [] };
+-  for (const rel of CHECKPOINT_TARGETS) {
+-    const source = path.join(workspace, rel);
+-    if (!(await pathExists(source))) {
+-      manifest.entries.push({ path: normalizeRel(rel), kind: "file", existed: false });
+-      continue;
++    const manifest: CheckpointManifest = { round, createdAt: nowIso(), entries: [] };
++    for (const rel of CHECKPOINT_TARGETS) {
++      const source = path.join(workspace, rel);
++      if (!(await pathExists(source))) {
++        manifest.entries.push({ path: normalizeRel(rel), kind: "file", existed: false });
++        continue;
++      }
++      const st = await stat(source);
++      manifest.entries.push({
++        path: normalizeRel(rel),
++        kind: st.isDirectory() ? "dir" : "file",
++        existed: true,
++      });
++      const dest = path.join(dir, rel);
++      await mkdir(path.dirname(dest), { recursive: true });
++      await cp(source, dest, { recursive: true, force: true, errorOnExist: false });
+     }
+-    const st = await stat(source);
+-    manifest.entries.push({
+-      path: normalizeRel(rel),
+-      kind: st.isDirectory() ? "dir" : "file",
+-      existed: true,
+-    });
+-    const dest = path.join(dir, rel);
+-    await mkdir(path.dirname(dest), { recursive: true });
+-    await cp(source, dest, { recursive: true, force: true, errorOnExist: false });
+-  }
+-  await writeFile(path.join(dir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
++    await writeFile(path.join(dir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+ 
+-  const info: CheckpointInfo = {
+-    round,
+-    dir: normalizeRel(path.relative(PROJECT_ROOT, dir)),
+-    createdAt: manifest.createdAt,
+-    restorable: true,
+-  };
+-  swarmStore.upsertCheckpoint(info);
+-  return info;
+-}
++    const info: CheckpointInfo = {
++      round,
++      dir: normalizeRel(path.relative(PROJECT_ROOT, dir)),
++      createdAt: manifest.createdAt,
++      restorable: true,
++    };
++    swarmStore.upsertCheckpoint(info);
++    return info;
++  }
+ 
+-async function restoreCheckpoint(round: number, workspace: string): Promise<number> {
+-  const dir = path.join(CHECKPOINTS_DIR, `round-${round}`);
+-  const manifestPath = path.join(dir, "manifest.json");
+-  if (!(await pathExists(manifestPath))) {
+-    throw new Error(`Checkpoint round ${round} not found.`);
+-  }
+-  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as CheckpointManifest;
+-  let touched = 0;
+-  for (const entry of manifest.entries) {
+-    const dst = path.join(workspace, entry.path);
+-    if (entry.existed) {
+-      const src = path.join(dir, entry.path);
+-      if (await pathExists(dst)) {
++  async function restoreCheckpoint(round: number, workspace: string): Promise<number> {
++    const dir = path.join(CHECKPOINTS_DIR, `round-${round}`);
++    const manifestPath = path.join(dir, "manifest.json");
++    if (!(await pathExists(manifestPath))) {
++      throw new Error(`Checkpoint round ${round} not found.`);
++    }
++    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as CheckpointManifest;
++    let touched = 0;
++    for (const entry of manifest.entries) {
++      const dst = path.join(workspace, entry.path);
++      if (entry.existed) {
++        const src = path.join(dir, entry.path);
++        if (await pathExists(dst)) {
++          await rm(dst, { recursive: true, force: true });
++        }
++        await mkdir(path.dirname(dst), { recursive: true });
++        await cp(src, dst, { recursive: true, force: true, errorOnExist: false });
++        touched += 1;
++      } else if (await pathExists(dst)) {
+         await rm(dst, { recursive: true, force: true });
++        touched += 1;
+       }
+-      await mkdir(path.dirname(dst), { recursive: true });
+-      await cp(src, dst, { recursive: true, force: true, errorOnExist: false });
+-      touched += 1;
+-    } else if (await pathExists(dst)) {
+-      await rm(dst, { recursive: true, force: true });
+-      touched += 1;
+     }
++    return touched;
+   }
+-  return touched;
+-}
+-async function resolveLintCommand(workspace: string): Promise<string | null> {
+-  const packageFile = path.join(workspace, "package.json");
+-  if (!(await pathExists(packageFile))) {
+-    return null;
+-  }
+-  try {
+-    const parsed = JSON.parse(await readFile(packageFile, "utf8")) as { scripts?: Record<string, string> };
+-    if (parsed.scripts?.lint) {
+-      return "npm run lint";
++  async function resolveLintCommand(workspace: string): Promise<string | null> {
++    const packageFile = path.join(workspace, "package.json");
++    if (!(await pathExists(packageFile))) {
++      return null;
++    }
++    try {
++      const parsed = JSON.parse(await readFile(packageFile, "utf8")) as { scripts?: Record<string, string> };
++      if (parsed.scripts?.lint) {
++        return "npm run lint";
++      }
++    } catch {
++      return null;
+     }
+-  } catch {
+     return null;
+   }
+-  return null;
+-}
+ 
+-async function runLint(round: number, workspace: string, roundDir: string, changedFiles: string[]): Promise<LintResult> {
+-  if (changedFiles.length === 0) {
+-    return { round, command: "skipped (no changes)", ran: false, passed: true, exitCode: 0 };
+-  }
+-  const command = await resolveLintCommand(workspace);
+-  if (!command) {
+-    return { round, command: "skipped (no lint script)", ran: false, passed: true, exitCode: 0 };
++  async function runLint(round: number, workspace: string, roundDir: string, changedFiles: string[]): Promise<LintResult> {
++    if (changedFiles.length === 0) {
++      return { round, command: "skipped (no changes)", ran: false, passed: true, exitCode: 0 };
++    }
++    const command = await resolveLintCommand(workspace);
++    if (!command) {
++      return { round, command: "skipped (no lint script)", ran: false, passed: true, exitCode: 0 };
++    }
++    const result = await runProcess(command, [], { cwd: workspace, shell: true });
++    const output = `${result.stdout}\n${result.stderr}`.trim();
++    await writeFile(path.join(roundDir, "lint.log"), output, "utf8");
++    return {
++      round,
++      command,
++      ran: true,
++      passed: result.exitCode === 0,
++      exitCode: result.exitCode,
++      outputExcerpt: summarizeOutput(output, 5),
++    };
+   }
+-  const result = await runProcess(command, [], { cwd: workspace, shell: true });
+-  const output = `${result.stdout}\n${result.stderr}`.trim();
+-  await writeFile(path.join(roundDir, "lint.log"), output, "utf8");
+-  return {
+-    round,
+-    command,
+-    ran: true,
+-    passed: result.exitCode === 0,
+-    exitCode: result.exitCode,
+-    outputExcerpt: summarizeOutput(output, 5),
+-  };
+-}
+ 
+-function maybeCompress(text: string, enabled: boolean): string {
+-  return enabled ? compressForContext(text) : text;
+-}
++  function maybeCompress(text: string, enabled: boolean): string {
++    return enabled ? compressForContext(text) : text;
++  }
+ 
+-function escapeRegex(value: string): string {
+-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+-}
++  function escapeRegex(value: string): string {
++    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
++  }
+ 
+-function mergeDirectiveLists(existing: string[], incoming: string[], maxItems = 12): string[] {
+-  const merged: string[] = [];
+-  const seen = new Set<string>();
+-  for (const item of [...incoming, ...existing]) {
+-    const cleaned = item.trim().replace(/\s+/g, " ");
+-    if (!cleaned) {
+-      continue;
+-    }
+-    const key = cleaned.toLowerCase();
+-    if (seen.has(key)) {
+-      continue;
+-    }
+-    seen.add(key);
+-    merged.push(cleaned);
+-    if (merged.length >= maxItems) {
+-      break;
++  function mergeDirectiveLists(existing: string[], incoming: string[], maxItems = 12): string[] {
++    const merged: string[] = [];
++    const seen = new Set<string>();
++    for (const item of [...incoming, ...existing]) {
++      const cleaned = item.trim().replace(/\s+/g, " ");
++      if (!cleaned) {
++        continue;
++      }
++      const key = cleaned.toLowerCase();
++      if (seen.has(key)) {
++        continue;
++      }
++      seen.add(key);
++      merged.push(cleaned);
++      if (merged.length >= maxItems) {
++        break;
++      }
+     }
++    return merged;
+   }
+-  return merged;
+-}
+ 
+-function parseStructuredSection(text: string, sectionLabel: string, maxItems = 8): string[] {
+-  const lines = text.split(/\r?\n/);
+-  const header = new RegExp(`^\\s*(?:\\d+\\)\\s*)?${escapeRegex(sectionLabel)}\\s*:`, "i");
+-  const nextSection = /^\s*(?:\d+\)\s*[A-Z0-9 _-]+\s*:|[A-Z][A-Z0-9 _-]{2,}\s*:)\s*$/;
+-  const items: string[] = [];
+-  let inSection = false;
++  function parseStructuredSection(text: string, sectionLabel: string, maxItems = 8): string[] {
++    const lines = text.split(/\r?\n/);
++    const header = new RegExp(`^\\s*(?:\\d+\\)\\s*)?${escapeRegex(sectionLabel)}\\s*:`, "i");
++    const nextSection = /^\s*(?:\d+\)\s*[A-Z0-9 _-]+\s*:|[A-Z][A-Z0-9 _-]{2,}\s*:)\s*$/;
++    const items: string[] = [];
++    let inSection = false;
+ 
+-  for (const raw of lines) {
+-    if (!inSection) {
+-      if (header.test(raw)) {
+-        inSection = true;
++    for (const raw of lines) {
++      if (!inSection) {
++        if (header.test(raw)) {
++          inSection = true;
++        }
++        continue;
++      }
++      if (nextSection.test(raw)) {
++        break;
++      }
++      const cleaned = raw.trim().replace(/^[-*]\s+/, "").replace(/^\d+[.)]\s+/, "").trim();
++      if (!cleaned || /^(none|n\/a|null)$/i.test(cleaned)) {
++        continue;
++      }
++      items.push(cleaned);
++      if (items.length >= maxItems) {
++        break;
+       }
+-      continue;
+-    }
+-    if (nextSection.test(raw)) {
+-      break;
+-    }
+-    const cleaned = raw.trim().replace(/^[-*]\s+/, "").replace(/^\d+[.)]\s+/, "").trim();
+-    if (!cleaned || /^(none|n\/a|null)$/i.test(cleaned)) {
+-      continue;
+-    }
+-    items.push(cleaned);
+-    if (items.length >= maxItems) {
+-      break;
+     }
++    return mergeDirectiveLists([], items, maxItems);
+   }
+-  return mergeDirectiveLists([], items, maxItems);
+-}
+ 
+-function formatDirectiveBlock(title: string, directives: string[]): string {
+-  if (!directives.length) {
+-    return "";
++  function formatDirectiveBlock(title: string, directives: string[]): string {
++    if (!directives.length) {
++      return "";
++    }
++    return `\n\n--- ${title} ---\n${directives.map((line, index) => `${index + 1}. ${line}`).join("\n")}`;
+   }
+-  return `\n\n--- ${title} ---\n${directives.map((line, index) => `${index + 1}. ${line}`).join("\n")}`;
+-}
+ 
+-function formatContinuityList(title: string, lines: string[]): string {
+-  if (!lines.length) {
+-    return `${title}:\n- none`;
++  function formatContinuityList(title: string, lines: string[]): string {
++    if (!lines.length) {
++      return `${title}:\n- none`;
++    }
++    return `${title}:\n${lines.map((line) => `- ${line}`).join("\n")}`;
+   }
+-  return `${title}:\n${lines.map((line) => `- ${line}`).join("\n")}`;
+-}
+ 
+-function buildAdaptiveGuidance(context: CoordinatorContinuityContext | null): string {
+-  if (!context) {
+-    return "No previous round. Start BALANCED, then tighten quickly on any ambiguity.";
+-  }
+-  if (context.status === "FAIL") {
+-    return "Previous round FAILED. Shift to STRICT/PARANOID mode and reject weak evidence.";
+-  }
+-  if (context.status === "REVISE") {
+-    return "Previous round required REVISE. Stay strict and target unresolved blockers first.";
++  function buildAdaptiveGuidance(context: CoordinatorContinuityContext | null): string {
++    if (!context) {
++      return "No previous round. Start BALANCED, then tighten quickly on any ambiguity.";
++    }
++    if (context.status === "FAIL") {
++      return "Previous round FAILED. Shift to STRICT/PARANOID mode and reject weak evidence.";
++    }
++    if (context.status === "REVISE") {
++      return "Previous round required REVISE. Stay strict and target unresolved blockers first.";
++    }
++    return "Previous round PASSED. Stay balanced but never bypass Rule #3 approval gate.";
+   }
+-  return "Previous round PASSED. Stay balanced but never bypass Rule #3 approval gate.";
+-}
+ 
+-function assignNextActions(actions: string[]): { worker1: string[]; worker2: string[] } {
+-  const worker1: string[] = [];
+-  const worker2: string[] = [];
+-  const worker2Pattern = /\b(worker[-\s]?2|w2|audit|coverage|verify|validate|falsify|repro)\b/i;
+-  const worker1Pattern = /\b(worker[-\s]?1|w1|implement|fix|patch|code|build)\b/i;
++  function assignNextActions(actions: string[]): { worker1: string[]; worker2: string[] } {
++    const worker1: string[] = [];
++    const worker2: string[] = [];
++    const worker2Pattern = /\b(worker[-\s]?2|w2|audit|coverage|verify|validate|falsify|repro)\b/i;
++    const worker1Pattern = /\b(worker[-\s]?1|w1|implement|fix|patch|code|build)\b/i;
+ 
+-  for (const action of actions) {
+-    if (worker2Pattern.test(action)) {
+-      worker2.push(action);
+-      continue;
+-    }
+-    if (worker1Pattern.test(action)) {
++    for (const action of actions) {
++      if (worker2Pattern.test(action)) {
++        worker2.push(action);
++        continue;
++      }
++      if (worker1Pattern.test(action)) {
++        worker1.push(action);
++        continue;
++      }
++      // Default ownership is implementation to avoid W1/W2 overlap on ambiguous tasks.
+       worker1.push(action);
+-      continue;
+     }
+-    // Default ownership is implementation to avoid W1/W2 overlap on ambiguous tasks.
+-    worker1.push(action);
+-  }
+ 
+-  return {
+-    worker1: mergeDirectiveLists([], worker1, 8),
+-    worker2: mergeDirectiveLists([], worker2, 8),
+-  };
+-}
++    return {
++      worker1: mergeDirectiveLists([], worker1, 8),
++      worker2: mergeDirectiveLists([], worker2, 8),
++    };
++  }
+ 
+-function isEnsembleTaskResult(value: AgentTaskResult | EnsembleTaskResult): value is EnsembleTaskResult {
+-  return typeof (value as Partial<EnsembleTaskResult>).selectedVariant === "string";
+-}
++  function isEnsembleTaskResult(value: AgentTaskResult | EnsembleTaskResult): value is EnsembleTaskResult {
++    return typeof (value as Partial<EnsembleTaskResult>).selectedVariant === "string";
++  }
+ 
+-async function runCoordinatorEnsemble(
+-  round: number,
+-  workspace: string,
+-  mode: RunMode,
+-  roundDir: string,
+-  prompt: string,
+-  execution?: RoleExecutionPreference,
+-): Promise<EnsembleTaskResult> {
+-  const outFile = path.join(roundDir, "coordinator.md");
+-  swarmStore.setAgentState("coordinator", {
+-    phase: "running",
+-    round,
+-    startedAt: nowIso(),
+-    outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
+-    taskTarget: "broadcast",
+-  });
+-  await maybeRequireApprovalBeforeAct(round, "coordinator");
+-  await waitIfPaused(round, "coordinator-act");
+-  const variants = [
+-    { id: "strict", suffix: "\n\nEnsemble mode: prioritize strict correctness." },
+-    { id: "balanced", suffix: "\n\nEnsemble mode: balance correctness and velocity." },
+-    { id: "risk", suffix: "\n\nEnsemble mode: maximize risk discovery." },
+-  ];
+-  const results = await Promise.all(
+-    variants.map(async (variant) => {
+-      const variantOut = path.join(roundDir, `coordinator-${variant.id}.md`);
+-      if (mode === "demo") {
+-        await writeFile(variantOut, demoOutput("coordinator", round), "utf8");
+-      } else {
+-        await runProviderTask({
+-          agentId: "coordinator",
+-          round,
+-          prompt: `${prompt}${variant.suffix}`,
++  async function runCoordinatorEnsemble(
++    round: number,
++    workspace: string,
++    mode: RunMode,
++    roundDir: string,
++    prompt: string,
++    execution?: RoleExecutionPreference,
++  ): Promise<EnsembleTaskResult> {
++    const outFile = path.join(roundDir, "coordinator.md");
++    swarmStore.setAgentState("coordinator", {
++      phase: "running",
++      round,
++      startedAt: nowIso(),
++      outputFile: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
++      taskTarget: "broadcast",
++    });
++    await maybeRequireApprovalBeforeAct(round, "coordinator");
++    await waitIfPaused(round, "coordinator-act");
++    const variants = [
++      { id: "strict", suffix: "\n\nEnsemble mode: prioritize strict correctness." },
++      { id: "balanced", suffix: "\n\nEnsemble mode: balance correctness and velocity." },
++      { id: "risk", suffix: "\n\nEnsemble mode: maximize risk discovery." },
++    ];
++    const results = await Promise.all(
++      variants.map(async (variant) => {
++        const variantOut = path.join(roundDir, `coordinator-${variant.id}.md`);
++        if (mode === "demo") {
++          await writeFile(variantOut, demoOutput("coordinator", round), "utf8");
++        } else {
++          await runProviderTask({
++            agentId: "coordinator",
++            round,
++            prompt: `${prompt}${variant.suffix}`,
++            outFile: variantOut,
++            workspace,
++            mode,
++            roundDir,
++            target: "broadcast",
++            logPrefix: `coordinator:${variant.id}`,
++            execution,
++          });
++        }
++        const text = await readFile(variantOut, "utf8");
++        for (const issue of verifyOutputSafety(text)) {
++          swarmStore.appendEvent({
++            type: "agent.safety",
++            round,
++            agentId: "coordinator",
++            level: "warn",
++            message: `[${variant.id}] ${issue}`,
++          });
++        }
++        return {
++          id: variant.id,
++          text,
++          status: parseCoordinatorStatus(text),
+           outFile: variantOut,
+-          workspace,
+-          mode,
+-          roundDir,
+-          target: "broadcast",
+-          logPrefix: `coordinator:${variant.id}`,
+-          execution,
+-        });
+-      }
+-      const text = await readFile(variantOut, "utf8");
+-      for (const issue of verifyOutputSafety(text)) {
+-        swarmStore.appendEvent({
+-          type: "agent.safety",
+-          round,
+-          agentId: "coordinator",
+-          level: "warn",
+-          message: `[${variant.id}] ${issue}`,
+-        });
+-      }
+-      return {
+-        id: variant.id,
+-        text,
+-        status: parseCoordinatorStatus(text),
+-        outFile: variantOut,
+-        sha256: hashText(text),
+-      };
+-    }),
+-  );
++          sha256: hashText(text),
++        };
++      }),
++    );
+ 
+-  const votes: Record<string, number> = {};
+-  for (const item of results) {
+-    votes[item.status] = (votes[item.status] || 0) + 1;
+-  }
+-  const selectedStatus = (Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0] ||
+-    "REVISE") as RoundStatus;
+-  const selected = results.find((item) => item.status === selectedStatus) || results[0];
+-  await writeFile(outFile, selected.text, "utf8");
++    const votes: Record<string, number> = {};
++    for (const item of results) {
++      votes[item.status] = (votes[item.status] || 0) + 1;
++    }
++    const selectedStatus = (Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0] ||
++      "REVISE") as RoundStatus;
++    const selected = results.find((item) => item.status === selectedStatus) || results[0];
++    await writeFile(outFile, selected.text, "utf8");
+ 
+-  swarmStore.upsertEnsembleResult({
+-    round,
+-    selectedVariant: selected.id,
+-    selectedStatus,
+-    votes,
+-  });
+-  swarmStore.setAgentState("coordinator", {
+-    phase: "completed",
+-    endedAt: nowIso(),
+-    excerpt: summarizeOutput(selected.text),
+-    pdaStage: "act",
+-  });
+-  await appendMessage(
+-    roundDir,
+-    message({
++    swarmStore.upsertEnsembleResult({
+       round,
+-      from: "coordinator",
+-      to: "broadcast",
+-      type: "result",
+-      summary: `Ensemble selected ${selected.id} (${selectedStatus}).`,
+-      artifactPath: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
++      selectedVariant: selected.id,
++      selectedStatus,
++      votes,
++    });
++    swarmStore.setAgentState("coordinator", {
++      phase: "completed",
++      endedAt: nowIso(),
++      excerpt: summarizeOutput(selected.text),
++      pdaStage: "act",
++    });
++    await appendMessage(
++      roundDir,
++      message({
++        round,
++        from: "coordinator",
++        to: "broadcast",
++        type: "result",
++        summary: `Ensemble selected ${selected.id} (${selectedStatus}).`,
++        artifactPath: normalizeRel(path.relative(PROJECT_ROOT, outFile)),
++        sha256: selected.sha256,
++      }),
++    );
++    return {
++      text: selected.text,
++      outFile,
+       sha256: selected.sha256,
+-    }),
+-  );
+-  return {
+-    text: selected.text,
+-    outFile,
+-    sha256: selected.sha256,
+-    failed: selected.text.startsWith("ERROR:"),
+-    selectedVariant: selected.id,
+-    selectedStatus,
+-  };
+-}
+-
+-function deriveRoundStatus(
+-  coordinatorStatus: RoundStatus,
+-  worker2Decision: string | undefined,
+-  evaluatorStatus: string | undefined,
+-  lintPassed: boolean,
+-): RoundStatus {
+-  if (coordinatorStatus === "FAIL") {
+-    return "FAIL";
++      failed: selected.text.startsWith("ERROR:"),
++      selectedVariant: selected.id,
++      selectedStatus,
++    };
+   }
+-  if (!lintPassed) {
++
++  function deriveRoundStatus(
++    coordinatorStatus: RoundStatus,
++    worker2Decision: string | undefined,
++    evaluatorStatus: string | undefined,
++    lintPassed: boolean,
++  ): RoundStatus {
++    if (coordinatorStatus === "FAIL") {
++      return "FAIL";
++    }
++    if (!lintPassed) {
++      return "REVISE";
++    }
++    const auditorOk = worker2Decision === "APPROVE" || worker2Decision === "SKIPPED_NO_CHANGES";
++    if (coordinatorStatus === "PASS" && evaluatorStatus === "PASS" && auditorOk) {
++      return "PASS";
++    }
+     return "REVISE";
+   }
+-  const auditorOk = worker2Decision === "APPROVE" || worker2Decision === "SKIPPED_NO_CHANGES";
+-  if (coordinatorStatus === "PASS" && evaluatorStatus === "PASS" && auditorOk) {
+-    return "PASS";
+-  }
+-  return "REVISE";
+-}
+-async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunMode }): Promise<void> {
+-  await mkdir(RUNS_DIR, { recursive: true });
+-  let prevFeedback = "";
+-  let prevCoordinatorContext: CoordinatorContinuityContext | null = null;
+-  let carryW1Directives: string[] = [];
+-  let carryW2Directives: string[] = [];
+-  let carryCoordinatorRules: string[] = [];
+-  let carryNextActions: string[] = [];
+-  const routingConfig = await loadRoutingConfig(opts.workspace);
+-  const roleExecutions = Object.fromEntries(
+-    AGENT_IDS.map((agentId) => [agentId, resolveRoleExecution(agentId, routingConfig)]),
+-  ) as Record<AgentId, RoleExecutionPreference>;
+-  swarmStore.appendEvent({
+-    type: "context.model_routing",
+-    round: 0,
+-    message: summarizeRouting(routingConfig, AGENT_IDS),
+-    metadata: {
+-      hasRoutingConfig: Boolean(routingConfig?.assignments),
+-      source: routingConfig?.source || process.env.SWARM_MODEL_ROUTING_FILE || "config/model-routing.json",
+-    },
+-  });
+-  const batchArtifacts = await loadBatchArtifactContext(opts.workspace);
+-  if (batchArtifacts.text) {
++  async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunMode }): Promise<void> {
++    await mkdir(RUNS_DIR, { recursive: true });
++    let prevFeedback = "";
++    let prevCoordinatorContext: CoordinatorContinuityContext | null = null;
++    let carryW1Directives: string[] = [];
++    let carryW2Directives: string[] = [];
++    let carryCoordinatorRules: string[] = [];
++    let carryNextActions: string[] = [];
++    const routingConfig = await loadRoutingConfig(opts.workspace);
++    const roleExecutions = Object.fromEntries(
++      AGENT_IDS.map((agentId) => [agentId, resolveRoleExecution(agentId, routingConfig)]),
++    ) as Record<AgentId, RoleExecutionPreference>;
+     swarmStore.appendEvent({
+-      type: "context.batch_artifacts",
++      type: "context.model_routing",
+       round: 0,
+-      message: `Loaded ${batchArtifacts.artifactCount} merged batch artifacts.`,
++      message: summarizeRouting(routingConfig, AGENT_IDS),
+       metadata: {
+-        source: batchArtifacts.sourceFile || "",
+-        rejectedCount: batchArtifacts.rejectedCount,
++        hasRoutingConfig: Boolean(routingConfig?.assignments),
++        source: routingConfig?.source || process.env.SWARM_MODEL_ROUTING_FILE || "config/model-routing.json",
+       },
+     });
+-  }
+-
+-  for (let round = 1; round <= opts.maxRounds; round += 1) {
+-    const features = swarmStore.getState().features;
+-    await waitIfPaused(round, "round_start");
+-    swarmStore.setCurrentRound(round);
+-    swarmStore.appendEvent({ type: "round.started", round, message: `Round ${round} started.` });
++    const batchArtifacts = await loadBatchArtifactContext(opts.workspace);
++    if (batchArtifacts.text) {
++      swarmStore.appendEvent({
++        type: "context.batch_artifacts",
++        round: 0,
++        message: `Loaded ${batchArtifacts.artifactCount} merged batch artifacts.`,
++        metadata: {
++          source: batchArtifacts.sourceFile || "",
++          rejectedCount: batchArtifacts.rejectedCount,
++        },
++      });
++    }
+ 
+-    const roundDir = path.join(RUNS_DIR, `round-${round}`);
+-    await mkdir(roundDir, { recursive: true });
+-    await writeFile(path.join(roundDir, MESSAGE_FILE), "", "utf8");
++    for (let round = 1; round <= opts.maxRounds; round += 1) {
++      const features = swarmStore.getState().features;
++      const roundTokenBaseline = tokenTracker.getAggregateTotals();
++      await waitIfPaused(round, "round_start");
++      swarmStore.setCurrentRound(round);
++      swarmStore.appendEvent({ type: "round.started", round, message: `Round ${round} started.` });
+ 
+-    if (features.checkpointing) {
+-      await createCheckpoint(round, opts.workspace);
+-      swarmStore.appendEvent({ type: "checkpoint.created", round, message: `Checkpoint round ${round} created.` });
+-    }
++      const roundDir = path.join(RUNS_DIR, `round-${round}`);
++      await mkdir(roundDir, { recursive: true });
++      await writeFile(path.join(roundDir, MESSAGE_FILE), "", "utf8");
+ 
+-    const [baseW1, baseW2, baseEval, baseCoord] = await Promise.all([
+-      readPrompt("worker1"),
+-      readPrompt("worker2"),
+-      readPrompt("evaluator"),
+-      readPrompt("coordinator"),
+-    ]);
++      if (features.checkpointing) {
++        await createCheckpoint(round, opts.workspace);
++        swarmStore.appendEvent({ type: "checkpoint.created", round, message: `Checkpoint round ${round} created.` });
++      }
+ 
+-    const researchResult = features.researchAgent
+-      ? await runResearch(round, opts.workspace, opts.mode, roundDir, prevFeedback, roleExecutions.research)
+-      : null;
+-    const evaluatorHistorySuffix = prevFeedback
+-      ? `\n\n--- PREVIOUS EVALUATOR FEEDBACK ---\n${maybeCompress(prevFeedback, features.contextCompression)}`
+-      : "";
+-    const researchSuffix =
+-      researchResult?.text
+-        ? `\n\n--- RESEARCH CONTEXT ---\n${maybeCompress(researchResult.text, features.contextCompression)}`
++      const [baseW1, baseW2, baseEval, baseCoord] = await Promise.all([
++        readPrompt("worker1"),
++        readPrompt("worker2"),
++        readPrompt("evaluator"),
++        readPrompt("coordinator"),
++      ]);
++
++      const researchResult = features.researchAgent
++        ? await runResearch(round, opts.workspace, opts.mode, roundDir, prevFeedback, roleExecutions.research)
++        : null;
++      const evaluatorHistorySuffix = prevFeedback
++        ? `\n\n--- PREVIOUS EVALUATOR FEEDBACK ---\n${maybeCompress(prevFeedback, features.contextCompression)}`
+         : "";
+-    const batchArtifactSuffix = batchArtifacts.text
+-      ? `\n\n--- BATCH ARTIFACT CONTEXT ---\n${maybeCompress(batchArtifacts.text, features.contextCompression)}`
+-      : "";
+-    const nextActionAssignments = assignNextActions(carryNextActions);
+-    const worker1DirectiveSuffix = [
+-      formatDirectiveBlock("PREVIOUS EVALUATOR DIRECTIVES (WORKER-1 ONLY)", carryW1Directives),
+-      formatDirectiveBlock("PREVIOUS COORDINATOR NEXT_ACTIONS (WORKER-1 OWNERSHIP)", nextActionAssignments.worker1),
+-    ].join("");
+-    const worker2DirectiveSuffix = [
+-      formatDirectiveBlock("PREVIOUS EVALUATOR DIRECTIVES (WORKER-2 ONLY)", carryW2Directives),
+-      formatDirectiveBlock("PREVIOUS COORDINATOR NEXT_ACTIONS (WORKER-2 OWNERSHIP)", nextActionAssignments.worker2),
+-    ].join("");
+-
+-    const before = features.heuristicSelector || features.lintLoop ? await collectFingerprints(opts.workspace) : new Map();
+-
+-    const worker1 = await runAgentTask({
+-      agentId: "worker1",
+-      round,
+-      prompt: `${baseW1}${researchSuffix}${batchArtifactSuffix}${worker1DirectiveSuffix}`,
+-      outFile: path.join(roundDir, "worker1.md"),
+-      workspace: opts.workspace,
+-      mode: opts.mode,
+-      roundDir,
+-      target: "coordinator",
+-      execution: roleExecutions.worker1,
+-    });
++      const researchSuffix =
++        researchResult?.text
++          ? `\n\n--- RESEARCH CONTEXT ---\n${maybeCompress(researchResult.text, features.contextCompression)}`
++          : "";
++      const batchArtifactSuffix = batchArtifacts.text
++        ? `\n\n--- BATCH ARTIFACT CONTEXT ---\n${maybeCompress(batchArtifacts.text, features.contextCompression)}`
++        : "";
++      const nextActionAssignments = assignNextActions(carryNextActions);
++      const worker1DirectiveSuffix = [
++        formatDirectiveBlock("PREVIOUS EVALUATOR DIRECTIVES (WORKER-1 ONLY)", carryW1Directives),
++        formatDirectiveBlock("PREVIOUS COORDINATOR NEXT_ACTIONS (WORKER-1 OWNERSHIP)", nextActionAssignments.worker1),
++      ].join("");
++      const worker2DirectiveSuffix = [
++        formatDirectiveBlock("PREVIOUS EVALUATOR DIRECTIVES (WORKER-2 ONLY)", carryW2Directives),
++        formatDirectiveBlock("PREVIOUS COORDINATOR NEXT_ACTIONS (WORKER-2 OWNERSHIP)", nextActionAssignments.worker2),
++      ].join("");
++
++      const before = features.heuristicSelector || features.lintLoop ? await collectFingerprints(opts.workspace) : new Map();
++
++      const worker1 = await runAgentTask({
++        agentId: "worker1",
++        round,
++        prompt: `${baseW1}${researchSuffix}${batchArtifactSuffix}${worker1DirectiveSuffix}`,
++        outFile: path.join(roundDir, "worker1.md"),
++        workspace: opts.workspace,
++        mode: opts.mode,
++        roundDir,
++        target: "coordinator",
++        execution: roleExecutions.worker1,
++      });
+ 
+-    const after = features.heuristicSelector || features.lintLoop ? await collectFingerprints(opts.workspace) : new Map();
+-    const changedFiles = diffFingerprints(before, after);
+-    swarmStore.appendEvent({
+-      type: "workspace.diff",
+-      round,
+-      message: `Worker-1 changed ${changedFiles.length} tracked files.`,
+-      metadata: { changedFiles: changedFiles.slice(0, 20) },
+-    });
++      const after = features.heuristicSelector || features.lintLoop ? await collectFingerprints(opts.workspace) : new Map();
++      const changedFiles = diffFingerprints(before, after);
++      swarmStore.appendEvent({
++        type: "workspace.diff",
++        round,
++        message: `Worker-1 changed ${changedFiles.length} tracked files.`,
++        metadata: { changedFiles: changedFiles.slice(0, 20) },
++      });
+ 
+-    const lint = features.lintLoop
+-      ? await runLint(round, opts.workspace, roundDir, changedFiles)
+-      : { round, command: "disabled", ran: false, passed: true, exitCode: 0 };
+-    swarmStore.upsertLintResult(lint);
+-    swarmStore.appendEvent({
+-      type: "lint.finished",
+-      round,
+-      level: lint.passed ? "info" : "warn",
+-      message: lint.ran
+-        ? lint.passed
+-          ? "Lint loop passed."
+-          : `Lint loop failed (exit ${lint.exitCode}).`
+-        : lint.command,
+-    });
++      const lint = features.lintLoop
++        ? await runLint(round, opts.workspace, roundDir, changedFiles)
++        : { round, command: "disabled", ran: false, passed: true, exitCode: 0 };
++      swarmStore.upsertLintResult(lint);
++      swarmStore.appendEvent({
++        type: "lint.finished",
++        round,
++        level: lint.passed ? "info" : "warn",
++        message: lint.ran
++          ? lint.passed
++            ? "Lint loop passed."
++            : `Lint loop failed (exit ${lint.exitCode}).`
++          : lint.command,
++      });
+ 
+-    const evaluatorPromise = runAgentTask({
+-      agentId: "evaluator",
+-      round,
+-      prompt: `${baseEval}${evaluatorHistorySuffix}${researchSuffix}${batchArtifactSuffix}${formatDirectiveBlock(
+-        "PREVIOUS COORDINATOR NEXT_ACTIONS",
+-        carryNextActions,
+-      )}\n\n--- WORKER-1 OUTPUT ---\n${maybeCompress(worker1.text, features.contextCompression)}`,
+-      outFile: path.join(roundDir, "evaluator.md"),
+-      workspace: opts.workspace,
+-      mode: opts.mode,
+-      roundDir,
+-      target: "coordinator",
+-      execution: roleExecutions.evaluator,
+-    });
++      const evaluatorPromise = runAgentTask({
++        agentId: "evaluator",
++        round,
++        prompt: `${baseEval}${evaluatorHistorySuffix}${researchSuffix}${batchArtifactSuffix}${formatDirectiveBlock(
++          "PREVIOUS COORDINATOR NEXT_ACTIONS",
++          carryNextActions,
++        )}\n\n--- WORKER-1 OUTPUT ---\n${maybeCompress(worker1.text, features.contextCompression)}`,
++        outFile: path.join(roundDir, "evaluator.md"),
++        workspace: opts.workspace,
++        mode: opts.mode,
++        roundDir,
++        target: "coordinator",
++        execution: roleExecutions.evaluator,
++      });
+ 
+-    let worker2Skipped = false;
+-    const worker2Promise =
+-      features.heuristicSelector && changedFiles.length === 0
+-        ? (async () => {
++      let worker2Skipped = false;
++      const worker2Promise =
++        features.heuristicSelector && changedFiles.length === 0
++          ? (async () => {
+             worker2Skipped = true;
+             const outFile = path.join(roundDir, "worker2.md");
+             const text =
+@@ -2318,12 +2528,11 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
+             });
+             return { text, outFile, sha256: hashText(text), failed: false } as AgentTaskResult;
+           })()
+-        : runAgentTask({
++          : runAgentTask({
+             agentId: "worker2",
+             round,
+-            prompt: `${baseW2}${researchSuffix}${batchArtifactSuffix}${worker2DirectiveSuffix}\n\n--- TRACKED CHANGED FILES ---\n${
+-              changedFiles.length ? changedFiles.join("\n") : "(none)"
+-            }\n\n--- WORKER-1 OUTPUT ---\n${maybeCompress(worker1.text, features.contextCompression)}`,
++            prompt: `${baseW2}${researchSuffix}${batchArtifactSuffix}${worker2DirectiveSuffix}\n\n--- TRACKED CHANGED FILES ---\n${changedFiles.length ? changedFiles.join("\n") : "(none)"
++              }\n\n--- WORKER-1 OUTPUT ---\n${maybeCompress(worker1.text, features.contextCompression)}`,
+             outFile: path.join(roundDir, "worker2.md"),
+             workspace: opts.workspace,
+             mode: opts.mode,
+@@ -2332,24 +2541,24 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
+             execution: roleExecutions.worker2,
+           });
+ 
+-    const [worker2, evaluator] = await Promise.all([worker2Promise, evaluatorPromise]);
+-    prevFeedback = evaluator.text;
+-
+-    const previousDecision: string = prevCoordinatorContext
+-      ? `${prevCoordinatorContext.status} (round ${prevCoordinatorContext.round}, variant ${prevCoordinatorContext.variant})`
+-      : "None (start of run)";
+-    const continuityBlock: string = [
+-      "--- HISTORY & CONTINUITY ---",
+-      "Previous Round Decision:",
+-      previousDecision,
+-      "Adaptive Guidance:",
+-      buildAdaptiveGuidance(prevCoordinatorContext),
+-      "",
+-      formatContinuityList("Carry-over evaluator COORDINATION_RULES", carryCoordinatorRules),
+-      formatContinuityList("Carry-over coordinator NEXT_ACTIONS", carryNextActions),
+-    ].join("\n");
+-
+-    const coordinatorPrompt: string = `${baseCoord}
++      const [worker2, evaluator] = await Promise.all([worker2Promise, evaluatorPromise]);
++      prevFeedback = evaluator.text;
++
++      const previousDecision: string = prevCoordinatorContext
++        ? `${prevCoordinatorContext.status} (round ${prevCoordinatorContext.round}, variant ${prevCoordinatorContext.variant})`
++        : "None (start of run)";
++      const continuityBlock: string = [
++        "--- HISTORY & CONTINUITY ---",
++        "Previous Round Decision:",
++        previousDecision,
++        "Adaptive Guidance:",
++        buildAdaptiveGuidance(prevCoordinatorContext),
++        "",
++        formatContinuityList("Carry-over evaluator COORDINATION_RULES", carryCoordinatorRules),
++        formatContinuityList("Carry-over coordinator NEXT_ACTIONS", carryNextActions),
++      ].join("\n");
++
++      const coordinatorPrompt: string = `${baseCoord}
+ 
+ Round: ${round}
+ Workspace: ${opts.workspace}
+@@ -2375,8 +2584,8 @@ Evaluator Output:
+ ${maybeCompress(evaluator.text, features.contextCompression)}
+ `;
+ 
+-    const coordinator: AgentTaskResult | EnsembleTaskResult = features.ensembleVoting
+-      ? await runCoordinatorEnsemble(
++      const coordinator: AgentTaskResult | EnsembleTaskResult = features.ensembleVoting
++        ? await runCoordinatorEnsemble(
+           round,
+           opts.workspace,
+           opts.mode,
+@@ -2384,7 +2593,7 @@ ${maybeCompress(evaluator.text, features.contextCompression)}
+           coordinatorPrompt,
+           roleExecutions.coordinator,
+         )
+-      : await runAgentTask({
++        : await runAgentTask({
+           agentId: "coordinator",
+           round,
+           prompt: coordinatorPrompt,
+@@ -2396,148 +2605,159 @@ ${maybeCompress(evaluator.text, features.contextCompression)}
+           execution: roleExecutions.coordinator,
+         });
+ 
+-    const coordStatus = parseCoordinatorStatus(coordinator.text);
+-    const worker2Decision = parseWorker2Decision(worker2.text) || (worker2Skipped ? "SKIPPED_NO_CHANGES" : undefined);
+-    const evalStatus = parseEvaluatorStatus(evaluator.text);
+-    const finalStatus = deriveRoundStatus(coordStatus, worker2Decision, evalStatus, lint.passed);
+-
+-    const notes: string[] = [];
+-    if (worker2Decision) {
+-      notes.push(`Worker-2 decision: ${worker2Decision}`);
+-    }
+-    if (evalStatus) {
+-      notes.push(`Evaluator status: ${evalStatus}`);
+-    }
+-    notes.push(`Lint: ${lint.passed ? "PASS" : `FAIL (${lint.exitCode})`}`);
+-    notes.push(
+-      changedFiles.length === 0
+-        ? "Heuristic selector: no tracked file changes."
+-        : `Tracked changed files: ${changedFiles.slice(0, 6).join(", ")}`,
+-    );
+-    notes.push(...parseRisks(coordinator.text));
+-
+-    swarmStore.upsertRound({
+-      round,
+-      status: finalStatus,
+-      worker2Decision,
+-      evaluatorStatus: evalStatus,
+-      coordinatorStatus: coordStatus,
+-      lintPassed: lint.passed,
+-      auditorSkipped: worker2Skipped,
+-      changedFiles: changedFiles.slice(0, 20),
+-      notes,
+-    });
+-
+-    swarmStore.appendEvent({
+-      type: "round.finished",
+-      round,
+-      message: `Round ${round} finished with ${finalStatus}.`,
+-      metadata: { worker2Decision, evalStatus, coordStatus, lintPassed: lint.passed },
+-    });
++      const coordStatus = parseCoordinatorStatus(coordinator.text);
++      const worker2Decision = parseWorker2Decision(worker2.text) || (worker2Skipped ? "SKIPPED_NO_CHANGES" : undefined);
++      const evalStatus = parseEvaluatorStatus(evaluator.text);
++      const finalStatus = deriveRoundStatus(coordStatus, worker2Decision, evalStatus, lint.passed);
++      const roundTokenTotals = subtractTokenUsage(tokenTracker.getAggregateTotals(), roundTokenBaseline);
+ 
+-    carryW1Directives = mergeDirectiveLists(carryW1Directives, parseStructuredSection(evaluator.text, "PROMPT_UPDATES_W1"), 10);
+-    carryW2Directives = mergeDirectiveLists(carryW2Directives, parseStructuredSection(evaluator.text, "PROMPT_UPDATES_W2"), 10);
+-    carryCoordinatorRules = mergeDirectiveLists(
+-      carryCoordinatorRules,
+-      parseStructuredSection(evaluator.text, "COORDINATION_RULES"),
+-      10,
+-    );
+-    carryNextActions = mergeDirectiveLists(carryNextActions, parseStructuredSection(coordinator.text, "NEXT_ACTIONS"), 12);
+-    const selectedVariant: string = isEnsembleTaskResult(coordinator) ? coordinator.selectedVariant : "single";
+-    prevCoordinatorContext = {
+-      round,
+-      status: finalStatus,
+-      variant: selectedVariant,
+-    };
++      const notes: string[] = [];
++      if (worker2Decision) {
++        notes.push(`Worker-2 decision: ${worker2Decision}`);
++      }
++      if (evalStatus) {
++        notes.push(`Evaluator status: ${evalStatus}`);
++      }
++      notes.push(`Lint: ${lint.passed ? "PASS" : `FAIL (${lint.exitCode})`}`);
++      notes.push(
++        changedFiles.length === 0
++          ? "Heuristic selector: no tracked file changes."
++          : `Tracked changed files: ${changedFiles.slice(0, 6).join(", ")}`,
++      );
++      notes.push(`Tokens: ${formatTokenUsage(roundTokenTotals)}`);
++      notes.push(...parseRisks(coordinator.text));
++
++      swarmStore.upsertRound({
++        round,
++        status: finalStatus,
++        worker2Decision,
++        evaluatorStatus: evalStatus,
++        coordinatorStatus: coordStatus,
++        lintPassed: lint.passed,
++        auditorSkipped: worker2Skipped,
++        changedFiles: changedFiles.slice(0, 20),
++        tokenTotals: roundTokenTotals,
++        notes,
++      });
+ 
+-    const defects = parseDefectSeverities(worker2.text);
+-    const shouldRewind =
+-      features.checkpointing &&
+-      round > 1 &&
+-      (coordStatus === "FAIL" || (!lint.passed && (defects.high > 0 || defects.med > 0)));
+-    if (shouldRewind) {
+-      const targetRound = round - 1;
+-      const restored = await restoreCheckpoint(targetRound, opts.workspace);
+       swarmStore.appendEvent({
+-        type: "run.rewind",
++        type: "round.finished",
+         round,
+-        level: "warn",
+-        message: `Auto-rewind to checkpoint round ${targetRound}.`,
+-        metadata: { targetRound, restoredCount: restored },
++        message: `Round ${round} finished with ${finalStatus}.`,
++        metadata: {
++          worker2Decision,
++          evalStatus,
++          coordStatus,
++          lintPassed: lint.passed,
++          roundTokenTotals,
++          aggregateTokenTotals: tokenTracker.getAggregateTotals(),
++        },
+       });
+-      if (features.humanInLoop) {
+-        swarmStore.setPaused(true, `Auto-paused after rewind to round ${targetRound}.`);
+-        await waitIfPaused(round, "post_rewind_review");
+-      }
+-    }
+ 
+-    if (finalStatus === "PASS") {
+-      swarmStore.finishRun("Coordinator, evaluator, and auditor reached PASS.");
+-      return;
+-    }
+-  }
++      carryW1Directives = mergeDirectiveLists(carryW1Directives, parseStructuredSection(evaluator.text, "PROMPT_UPDATES_W1"), 10);
++      carryW2Directives = mergeDirectiveLists(carryW2Directives, parseStructuredSection(evaluator.text, "PROMPT_UPDATES_W2"), 10);
++      carryCoordinatorRules = mergeDirectiveLists(
++        carryCoordinatorRules,
++        parseStructuredSection(evaluator.text, "COORDINATION_RULES"),
++        10,
++      );
++      carryNextActions = mergeDirectiveLists(carryNextActions, parseStructuredSection(coordinator.text, "NEXT_ACTIONS"), 12);
++      const selectedVariant: string = isEnsembleTaskResult(coordinator) ? coordinator.selectedVariant : "single";
++      prevCoordinatorContext = {
++        round,
++        status: finalStatus,
++        variant: selectedVariant,
++      };
+ 
+-  swarmStore.finishRun("Reached max rounds; revisions still required.");
+-}
++      const defects = parseDefectSeverities(worker2.text);
++      const shouldRewind =
++        features.checkpointing &&
++        round > 1 &&
++        (coordStatus === "FAIL" || (!lint.passed && (defects.high > 0 || defects.med > 0)));
++      if (shouldRewind) {
++        const targetRound = round - 1;
++        const restored = await restoreCheckpoint(targetRound, opts.workspace);
++        swarmStore.appendEvent({
++          type: "run.rewind",
++          round,
++          level: "warn",
++          message: `Auto-rewind to checkpoint round ${targetRound}.`,
++          metadata: { targetRound, restoredCount: restored },
++        });
++        if (features.humanInLoop) {
++          swarmStore.setPaused(true, `Auto-paused after rewind to round ${targetRound}.`);
++          await waitIfPaused(round, "post_rewind_review");
++        }
++      }
+ 
+-export function getActiveRunPromise(): Promise<void> | null {
+-  return activeRunPromise;
+-}
++      if (finalStatus === "PASS") {
++        swarmStore.finishRun("Coordinator, evaluator, and auditor reached PASS.");
++        return;
++      }
++    }
+ 
+-export function pauseSwarmRun(reason?: string): boolean {
+-  const state = swarmStore.getState();
+-  if (!state.running || state.paused || !state.features.humanInLoop) {
+-    return false;
++    swarmStore.finishRun("Reached max rounds; revisions still required.");
+   }
+-  swarmStore.setPaused(true, reason || "Paused by operator.");
+-  return true;
+-}
+ 
+-export function resumeSwarmRun(): boolean {
+-  const state = swarmStore.getState();
+-  if (!state.running || !state.paused) {
+-    return false;
++  export function getActiveRunPromise(): Promise<void> | null {
++    return activeRunPromise;
+   }
+-  swarmStore.setPaused(false);
+-  return true;
+-}
+ 
+-export async function rewindSwarmToRound(round: number): Promise<{ round: number; restoredCount: number }> {
+-  const state = swarmStore.getState();
+-  if (!state.workspace) {
+-    throw new Error("No workspace available for rewind.");
+-  }
+-  if (state.running && !state.paused) {
+-    throw new Error("Pause the run before rewinding.");
++  export function pauseSwarmRun(reason?: string): boolean {
++    const state = swarmStore.getState();
++    if (!state.running || state.paused || !state.features.humanInLoop) {
++      return false;
++    }
++    swarmStore.setPaused(true, reason || "Paused by operator.");
++    return true;
+   }
+-  const restoredCount = await restoreCheckpoint(round, state.workspace);
+-  swarmStore.appendEvent({
+-    type: "run.rewind",
+-    round: state.currentRound,
+-    level: "warn",
+-    message: `Manual rewind to round ${round}.`,
+-    metadata: { targetRound: round, restoredCount },
+-  });
+-  return { round, restoredCount };
+-}
+ 
+-export function startSwarmRun(options: StartOptions = {}): StartResult {
+-  const maxRounds = clampRounds(options.maxRounds);
+-  const workspace = path.resolve(options.workspace || PROJECT_ROOT);
+-  const mode = resolveRunMode(options.mode);
+-  const runId = swarmStore.startRun({
+-    workspace,
+-    maxRounds,
+-    mode,
+-    features: options.features,
+-  });
+-  const features = swarmStore.getState().features;
++  export function resumeSwarmRun(): boolean {
++    const state = swarmStore.getState();
++    if (!state.running || !state.paused) {
++      return false;
++    }
++    swarmStore.setPaused(false);
++    return true;
++  }
+ 
+-  activeRunPromise = runSwarm({ maxRounds, workspace, mode })
+-    .catch((error) => swarmStore.failRun(error))
+-    .finally(() => {
+-      activeRunPromise = null;
++  export async function rewindSwarmToRound(round: number): Promise<{ round: number; restoredCount: number }> {
++    const state = swarmStore.getState();
++    if (!state.workspace) {
++      throw new Error("No workspace available for rewind.");
++    }
++    if (state.running && !state.paused) {
++      throw new Error("Pause the run before rewinding.");
++    }
++    const restoredCount = await restoreCheckpoint(round, state.workspace);
++    swarmStore.appendEvent({
++      type: "run.rewind",
++      round: state.currentRound,
++      level: "warn",
++      message: `Manual rewind to round ${round}.`,
++      metadata: { targetRound: round, restoredCount },
+     });
++    return { round, restoredCount };
++  }
++
++  export function startSwarmRun(options: StartOptions = {}): StartResult {
++    const maxRounds = clampRounds(options.maxRounds);
++    const workspace = path.resolve(options.workspace || PROJECT_ROOT);
++    const mode = resolveRunMode(options.mode);
++    tokenTracker.reset();
++    const runId = swarmStore.startRun({
++      workspace,
++      maxRounds,
++      mode,
++      features: options.features,
++    });
++    const features = swarmStore.getState().features;
+ 
+-  return { runId, mode, features };
+-}
++    activeRunPromise = runSwarm({ maxRounds, workspace, mode })
++      .catch((error) => swarmStore.failRun(error))
++      .finally(() => {
++        activeRunPromise = null;
++      });
++
++    return { runId, mode, features };
++  }

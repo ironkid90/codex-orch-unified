@@ -16,12 +16,26 @@ export async function GET(request: Request) {
         controller.enqueue(encoder.encode(toSse(event, payload)));
       };
 
-      push("state", swarmStore.getState());
+      let lastSerializedState = "";
+      const pushLatestState = () => {
+        const nextState = swarmStore.getState();
+        const serialized = JSON.stringify(nextState);
+        if (serialized === lastSerializedState) {
+          return;
+        }
+        lastSerializedState = serialized;
+        push("state", nextState);
+      };
+
+      pushLatestState();
 
       const unsubscribe = swarmStore.subscribe((event) => {
         push("event", event);
-        push("state", swarmStore.getState());
+        pushLatestState();
       });
+      const poll = setInterval(() => {
+        pushLatestState();
+      }, 1000);
 
       const keepAlive = setInterval(() => {
         push("ping", { ts: new Date().toISOString() });
@@ -30,6 +44,7 @@ export async function GET(request: Request) {
       request.signal.addEventListener(
         "abort",
         () => {
+          clearInterval(poll);
           clearInterval(keepAlive);
           unsubscribe();
           try {

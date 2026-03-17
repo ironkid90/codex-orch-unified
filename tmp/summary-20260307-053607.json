@@ -1,0 +1,59 @@
+{
+  "objective": "Integrate Symphony orchestration patterns and Kilo Code orchestration patterns into codex-orch-unified.",
+  "changes": [
+    {
+      "path": "SYMPHONY_INTEGRATION.md",
+      "summary": "Rewrote the design document to map Symphony workflow, workspace, tracker, retry, token, and lifecycle-hook patterns plus Kilo delegation, skills, and todo concepts onto the swarm runtime."
+    },
+    {
+      "path": "WORKFLOW.md",
+      "summary": "Added an example workflow contract with YAML front matter covering GitHub tracker settings, polling, workspace isolation, lifecycle hooks, agent settings, delegation modes, skills, and todo tracking."
+    },
+    {
+      "path": "lib/swarm/workflow-loader.ts",
+      "summary": "Implemented constrained WORKFLOW.md parsing, environment variable indirection with fallbacks, validation, typed workflow config normalization, and hot-reload file watching."
+    },
+    {
+      "path": "lib/swarm/workspace-manager.ts",
+      "summary": "Implemented issue-to-workspace mapping, identifier sanitization, project-root containment validation, on-demand workspace creation, and timeout-bounded lifecycle hook execution."
+    },
+    {
+      "path": "lib/swarm/issue-tracker.ts",
+      "summary": "Added a normalized IssueTrackerAdapter contract, a GraphQL-backed Linear adapter, and an explicit GitHub adapter stub."
+    },
+    {
+      "path": "lib/swarm/retry-queue.ts",
+      "summary": "Implemented capped exponential backoff scheduling using delay = min(10000 * 2^(attempt-1), maxRetryBackoffMs)."
+    },
+    {
+      "path": "lib/swarm/token-tracker.ts",
+      "summary": "Added session-level and aggregate token tracking helpers with delta and absolute recording support."
+    },
+    {
+      "path": "lib/swarm/engine.ts",
+      "summary": "Integrated stall detection, workspace safety validation, task/session token tracking, research and ensemble token accounting, and round token totals."
+    },
+    {
+      "path": "lib/swarm/types.ts",
+      "summary": "Extended RoundSummary with tokenTotals so round summaries can report token usage."
+    }
+  ],
+  "commands": [
+    {
+      "command": "npm run typecheck",
+      "result": "passed"
+    }
+  ],
+  "verification": {
+    "status": "passed",
+    "details": [
+      "TypeScript compilation succeeded with tsc --noEmit -p tsconfig.json."
+    ]
+  },
+  "outcomes": [
+    "The swarm engine now exposes configurable stall detection through SWARM_STALL_TIMEOUT_MS.",
+    "Round summaries now include per-round token totals and aggregate token metadata.",
+    "Workflow, workspace, retry, tracker, and token modules are independently importable."
+  ],
+  "timestamp": "2026-03-07T05:36:07+02:00"
+}

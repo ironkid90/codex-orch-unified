@@ -3,6 +3,10 @@
    ═══════════════════════════════════════════════════════════ */
 
 :root {
+  /* Font stacks (system fonts — no external network required) */
+  --font-heading: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+
   /* Background layers */
   --bg-deep: #06080f;
   --bg: #0a0e1a;
