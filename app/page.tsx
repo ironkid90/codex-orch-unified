@@ -13,6 +13,42 @@ interface StateResponse {
   };
 }
 
+interface ControlCenterEnvRequirement {
+  name: string;
+  requiredBy: string[];
+  present: boolean;
+  providedBy: string[];
+}
+
+interface ControlCenterSnapshot {
+  checkedAt: string;
+  mcpSettingsFound: boolean;
+  mcpSettingsPath: string;
+  enabledServers: string[];
+  requiredEnvVars: ControlCenterEnvRequirement[];
+  missingEnvVars: ControlCenterEnvRequirement[];
+  blockingIssues: string[];
+  warnings: string[];
+  dockerRegistry: {
+    enabledServers: string[];
+    registryPath: string | null;
+    registryPathResolved: string | null;
+    registryPathExists: boolean;
+    missingManifests: string[];
+  };
+}
+
+interface ControlCenterResponse {
+  controlCenter: ControlCenterSnapshot;
+  error?: string;
+}
+
+interface StartResponse {
+  error?: string;
+  requiresSetup?: boolean;
+  controlCenter?: ControlCenterSnapshot;
+}
+
 const DEFAULT_FEATURES: SwarmFeatures = {
   lintLoop: true,
   ensembleVoting: true,
@@ -77,6 +113,25 @@ export default function HomePage() {
   const [supportsRewind, setSupportsRewind] = useState(true);
   const [features, setFeatures] = useState<SwarmFeatures>(DEFAULT_FEATURES);
   const [error, setError] = useState<string | null>(null);
+  const [controlCenter, setControlCenter] = useState<ControlCenterSnapshot | null>(null);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
+  const [secretInputs, setSecretInputs] = useState<Record<string, string>>({});
+  const [registryPathInput, setRegistryPathInput] = useState("");
+
+  const loadControlCenter = useCallback(async () => {
+    try {
+      const res = await fetch("/api/swarm/control-center", { cache: "no-store" });
+      if (!res.ok) throw new Error(`Failed to load control center: ${res.status}`);
+      const data = (await res.json()) as ControlCenterResponse;
+      setControlCenter(data.controlCenter);
+      if (data.controlCenter.dockerRegistry.registryPath) {
+        setRegistryPathInput(data.controlCenter.dockerRegistry.registryPath);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
 
   const loadState = useCallback(async () => {
     const res = await fetch("/api/swarm/state", { cache: "no-store" });
@@ -93,6 +148,8 @@ export default function HomePage() {
   useEffect(() => {
     void loadState();
   }, [loadState]);
+
+  useEffect(() => { void loadControlCenter(); }, [loadControlCenter]);
 
   useEffect(() => {
     const source = new EventSource("/api/swarm/stream");
@@ -117,21 +174,27 @@ export default function HomePage() {
   const startRun = useCallback(async () => {
     setBusy(true);
     setError(null);
+    setSettingsMessage(null);
     try {
       const res = await fetch("/api/swarm/start", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ maxRounds, mode, features }),
       });
-      const payload = (await res.json()) as { error?: string };
-      if (!res.ok) throw new Error(payload.error || "Unable to start run.");
-      await loadState();
+      const payload = (await res.json()) as StartResponse;
+      if (!res.ok) {
+        if (payload.controlCenter) {
+          setControlCenter(payload.controlCenter);
+        }
+        throw new Error(payload.error || "Unable to start run.");
+      }
+      await Promise.all([loadState(), loadControlCenter()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
-  }, [features, loadState, maxRounds, mode]);
+  }, [features, loadControlCenter, loadState, maxRounds, mode]);
 
   const controlRun = useCallback(
     async (action: "pause" | "resume" | "rewind", round?: number) => {
@@ -155,6 +218,41 @@ export default function HomePage() {
     [loadState],
   );
 
+  const saveControlCenter = useCallback(async () => {
+    setSettingsBusy(true);
+    setError(null);
+    setSettingsMessage(null);
+
+    try {
+      const envPayload = Object.fromEntries(
+        Object.entries(secretInputs).filter(([, value]) => value.trim().length > 0),
+      );
+      const currentRegistryPath = controlCenter?.dockerRegistry.registryPath || "";
+      const nextRegistryPath = registryPathInput.trim();
+
+      const res = await fetch("/api/swarm/control-center", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          env: envPayload,
+          registryPath: nextRegistryPath && nextRegistryPath !== currentRegistryPath ? nextRegistryPath : undefined,
+        }),
+      });
+
+      const payload = (await res.json()) as ControlCenterResponse & { message?: string; error?: string };
+      if (!res.ok) throw new Error(payload.error || "Unable to save control-center settings.");
+
+      setSecretInputs({});
+      setControlCenter(payload.controlCenter);
+      setSettingsMessage(payload.message || "Settings updated.");
+      await loadState();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSettingsBusy(false);
+    }
+  }, [controlCenter?.dockerRegistry.registryPath, loadState, registryPathInput, secretInputs]);
+
   const latestEvents = useMemo(() => {
     if (!state) return [];
     return [...state.events].reverse().slice(0, 140);
@@ -164,6 +262,16 @@ export default function HomePage() {
     if (!state) return [];
     return [...state.messages].reverse().slice(0, 80);
   }, [state]);
+
+  const blockingIssues = controlCenter?.blockingIssues || [];
+  const warningIssues = controlCenter?.warnings || [];
+  const missingEnvVars = controlCenter?.missingEnvVars || [];
+  const hasBlockingSetup = blockingIssues.length > 0;
+  const hasPendingSecretValues = Object.values(secretInputs).some((value) => value.trim().length > 0);
+  const hasRegistryPathUpdate =
+    registryPathInput.trim().length > 0
+    && registryPathInput.trim() !== (controlCenter?.dockerRegistry.registryPath || "");
+  const canSaveControlCenter = hasPendingSecretValues || hasRegistryPathUpdate;
 
   const runBadge = statusBadge(state?.rounds.at(-1)?.status ?? "IDLE");
   const isRunning = Boolean(state?.running);
@@ -255,8 +363,8 @@ export default function HomePage() {
               </select>
             </label>
 
-            <button className="btn btn-primary" onClick={() => void startRun()} disabled={busy || isRunning}>
-              {isRunning ? "● Running" : "▶ Start Swarm"}
+            <button className="btn btn-primary" onClick={() => void startRun()} disabled={busy || isRunning || hasBlockingSetup}>
+              {isRunning ? "● Running" : hasBlockingSetup ? "⚠ Setup Required" : "▶ Start Swarm"}
             </button>
 
             {canPause && (

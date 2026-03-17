@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { inspectControlCenter } from "@/lib/swarm/control-center";
 import { getActiveRunPromise, startSwarmRun } from "@/lib/swarm/engine";
 import { swarmStore } from "@/lib/swarm/store";
 import type { RunMode, SwarmFeatures } from "@/lib/swarm/types";
@@ -22,6 +23,27 @@ export async function POST(request: Request) {
         state: currentState,
       },
       { status: 409 },
+    );
+  }
+
+  try {
+    const controlCenter = await inspectControlCenter(process.cwd());
+    if (controlCenter.blockingIssues.length > 0) {
+      return NextResponse.json(
+        {
+          error: "Control center setup required before starting a run.",
+          requiresSetup: true,
+          controlCenter,
+        },
+        { status: 428 },
+      );
+    }
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error: `Failed to run control-center preflight: ${error instanceof Error ? error.message : String(error)}`,
+      },
+      { status: 500 },
     );
   }
 

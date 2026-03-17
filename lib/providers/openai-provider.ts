@@ -13,6 +13,7 @@ import type {
   ToolCall,
   ToolDefinition,
 } from "./types";
+import { resolveOpenAIAuth } from "./auth";
 
 const OPENAI_MODELS: ModelInfo[] = [
   { id: "gpt-4o", name: "GPT-4o", contextWindow: 128000, maxOutputTokens: 16384, supportsTools: true, supportsVision: true, supportsStreaming: true, inputCostPer1k: 0.005, outputCostPer1k: 0.015 },
@@ -86,22 +87,28 @@ function convertTools(tools: ToolDefinition[]): OpenAITool[] {
 export class OpenAIProvider implements Provider {
   readonly type = "openai" as const;
   readonly config: ProviderConfig;
-  private baseUrl: string;
 
   constructor(config: ProviderConfig) {
     this.config = config;
-    this.baseUrl = config.baseUrl ?? "https://api.openai.com/v1";
   }
 
-  private get headers(): Record<string, string> {
+  private async getConnection(): Promise<{ baseUrl: string; headers: Record<string, string> }> {
+    const resolved = await resolveOpenAIAuth({
+      apiKey: this.config.apiKey,
+      baseUrl: this.config.baseUrl,
+      headers: this.config.headers,
+    });
     return {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${this.config.apiKey ?? process.env.OPENAI_API_KEY ?? ""}`,
-      ...this.config.headers,
+      baseUrl: resolved.baseUrl,
+      headers: {
+        "Content-Type": "application/json",
+        ...resolved.headers,
+      },
     };
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {
+    const connection = await this.getConnection();
     const messages = convertMessages(options.messages);
     const body: Record<string, unknown> = {
       model: this.config.model,
@@ -119,9 +126,9 @@ export class OpenAIProvider implements Provider {
       body.stop = options.stopSequences;
     }
 
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+    const res = await fetch(`${connection.baseUrl}/chat/completions`, {
       method: "POST",
-      headers: this.headers,
+      headers: connection.headers,
       body: JSON.stringify(body),
     });
 
@@ -162,6 +169,7 @@ export class OpenAIProvider implements Provider {
   }
 
   async *stream(options: CompletionOptions): AsyncGenerator<CompletionChunk> {
+    const connection = await this.getConnection();
     const messages = convertMessages(options.messages);
     const body: Record<string, unknown> = {
       model: this.config.model,
@@ -177,9 +185,9 @@ export class OpenAIProvider implements Provider {
       body.tool_choice = "auto";
     }
 
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+    const res = await fetch(`${connection.baseUrl}/chat/completions`, {
       method: "POST",
-      headers: this.headers,
+      headers: connection.headers,
       body: JSON.stringify(body),
     });
 
@@ -270,7 +278,8 @@ export class OpenAIProvider implements Provider {
 
   async listModels(): Promise<ModelInfo[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/models`, { headers: this.headers });
+      const connection = await this.getConnection();
+      const res = await fetch(`${connection.baseUrl}/models`, { headers: connection.headers });
       if (!res.ok) return OPENAI_MODELS;
       const data = await res.json() as { data: Array<{ id: string }> };
       return data.data.map((m) => ({
@@ -288,7 +297,8 @@ export class OpenAIProvider implements Provider {
 
   async validateConfig(): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/models`, { headers: this.headers });
+      const connection = await this.getConnection();
+      const res = await fetch(`${connection.baseUrl}/models`, { headers: connection.headers });
       return res.ok;
     } catch {
       return false;

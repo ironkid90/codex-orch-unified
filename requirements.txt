@@ -9,3 +9,5 @@ azure-identity
 python-dotenv
 debugpy
 agent-dev-cli
+eslint
+

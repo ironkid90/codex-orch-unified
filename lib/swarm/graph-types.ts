@@ -32,15 +32,16 @@ export type GraphEdgeType = z.infer<typeof GraphEdgeTypeSchema>;
 // ─── Node Definition ─────────────────────────────────────────────────────────
 
 export const GraphNodeSchema = z.object({
-  id: z.string(),
+  id: z.string().min(1),
   type: GraphNodeTypeSchema,
   label: z.string().optional(),
   /** Agent role ID (for agent nodes) */
   agentRole: z.string().optional(),
-  /** Gate condition expression (for gate nodes) */
+  /** Gate condition expression (for gate nodes) or predicate for conditional logic */
+  predicate: z.string().optional(),
   condition: z.string().optional(),
   /** Max retries before giving up */
-  maxRetries: z.number().int().min(0).max(5).default(0),
+  maxRetries: z.number().int().min(0).max(5).optional(),
   /** Timeout in ms */
   timeoutMs: z.number().positive().optional(),
   metadata: z.record(z.unknown()).optional(),
@@ -82,19 +83,27 @@ export type GraphEdge = z.infer<typeof GraphEdgeSchema>;
 // ─── Workflow Graph ───────────────────────────────────────────────────────────
 
 export const WorkflowGraphSchema = z.object({
-  id: z.string(),
-  version: z.string().default("1.0"),
-  name: z.string(),
+  id: z.string().min(1),
+  version: z.string().default("1.0").optional(),
+  name: z.string().optional(),
   description: z.string().optional(),
   nodes: z.array(GraphNodeSchema).min(1),
   edges: z.array(GraphEdgeSchema),
-  /** Entry point node IDs (no incoming edges) */
-  entryNodes: z.array(z.string()).min(1),
-  /** Terminal node IDs (no outgoing edges) */
-  exitNodes: z.array(z.string()).min(1),
+  /** Entry point node IDs (no incoming edges) - supports both singular and plural */
+  entryNodeId: z.string().min(1).optional(),
+  entryNodes: z.array(z.string()).min(1).optional(),
+  /** Terminal node IDs (no outgoing edges) - supports both singular and plural */
+  exitNodeIds: z.array(z.string()).optional(),
+  exitNodes: z.array(z.string()).min(1).optional(),
   metadata: z.record(z.unknown()).optional(),
   createdAt: z.string().datetime().optional(),
-});
+}).refine(
+  (data) => data.entryNodeId || (data.entryNodes && data.entryNodes.length > 0),
+  { message: "Either entryNodeId or entryNodes must be provided" }
+).refine(
+  (data) => (data.exitNodeIds && data.exitNodeIds.length > 0) || (data.exitNodes && data.exitNodes.length > 0),
+  { message: "Either exitNodeIds or exitNodes must be provided" }
+);
 
 export type WorkflowGraph = z.infer<typeof WorkflowGraphSchema>;
 
@@ -114,10 +123,12 @@ export type NodeExecutionStatus = z.infer<typeof NodeExecutionStatusSchema>;
 export const NodeExecutionResultSchema = z.object({
   nodeId: z.string(),
   status: NodeExecutionStatusSchema,
-  startedAt: z.number().optional(),
-  completedAt: z.number().optional(),
+  startedAt: z.union([z.string(), z.number()]).optional(),
+  completedAt: z.union([z.string(), z.number()]).optional(),
+  endedAt: z.string().optional(),
   output: z.unknown().optional(),
   error: z.string().optional(),
+  round: z.number().int().optional(),
   retryCount: z.number().int().default(0),
 });
 
@@ -129,11 +140,15 @@ export const GraphExecutionStateSchema = z.object({
   currentNodeIds: z.array(z.string()),
   completedNodeIds: z.array(z.string()),
   failedNodeIds: z.array(z.string()),
+  skippedNodeIds: z.array(z.string()).optional(),
   nodeResults: z.record(NodeExecutionResultSchema),
-  isComplete: z.boolean().default(false),
-  isFailed: z.boolean().default(false),
-  startedAt: z.number(),
-  completedAt: z.number().optional(),
+  context: z.record(z.unknown()).optional(),
+  isComplete: z.boolean().default(false).optional(),
+  isFailed: z.boolean().default(false).optional(),
+  startedAt: z.union([z.string(), z.number()]),
+  completedAt: z.union([z.string(), z.number()]).optional(),
+  endedAt: z.string().optional(),
+  status: z.enum(["running","completed","failed","paused"]),
   metadata: z.record(z.unknown()).optional(),
 });
 

@@ -60,6 +60,12 @@ Thumbs.db
 .vscode/*.log
 roocode-ref
 
+# Firebase debug logs
+firebase-debug.log
+*-debug.log
+
+# Local tooling session identifiers (machine-specific, changes frequently)
+.kilocode/session-id
 
 # Temporary agent session files
 tmp/

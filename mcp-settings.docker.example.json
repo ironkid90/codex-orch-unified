@@ -1,0 +1,32 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "."
+      ]
+    }
+  },
+  "dockerRegistry": {
+    "registryPath": "C:/path/to/mcp-registry",
+    "servers": {
+      "docker-docs": {
+        "enabled": true
+      },
+      "ast-grep": {
+        "enabled": true,
+        "parameters": {
+          "path": "."
+        }
+      },
+      "apify": {
+        "enabled": false,
+        "secrets": {
+          "APIFY_API_KEY": "${APIFY_API_KEY}"
+        }
+      }
+    }
+  }
+}
