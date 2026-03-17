@@ -67,7 +67,7 @@
 #### **Available npm/pnpm Scripts** (inferred from README and codebase)
 ```bash
 npm install              # Install dependencies
-npm run dev              # Start development server (localhost:3000)
+npm run dev              # Start development server (localhost:3017)
 npm run swarm:setup      # Bootstrap auth/API configuration
 npm run swarm:run        # Execute swarm with local Codex CLI
 npm run lint            # Lint check (configured as 'tsc --noEmit')
@@ -149,7 +149,7 @@ WORKDIR /usr/src/app
 COPY ["package.json", "package-lock.json*", "npm-shrinkwrap.json*", "./"]
 RUN npm install --production --silent && mv node_modules ../
 COPY . .
-EXPOSE 3000
+EXPOSE 3017
 RUN chown -R node /usr/src/app
 USER node
 CMD ["npm", "start"]
@@ -166,7 +166,7 @@ services:
     environment:
       NODE_ENV: production
     ports:
-      - 3000:3000
+      - 3017:3017
 ```
 
 **Debug variant** (`compose.debug.yaml`):

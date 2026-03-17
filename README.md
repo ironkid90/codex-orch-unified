@@ -15,6 +15,7 @@ The primary swarm currently provides:
 - File-backed pause/resume/rewind requests in `runs/_runtime/control-queue`
 - Checkpoints and round artifacts under `runs/`
 - Provider/model routing from `config/model-routing.json`
+- Built-in MCP tool loading from `mcp-settings.json`, including Docker MCP registry manifests
 
 ## Current Runtime Status
 
@@ -55,10 +56,20 @@ npm run doctor
 At minimum, configure the providers you want the swarm to use. Typical options:
 
 - `OPENAI_API_KEY`
+- `SWARM_OPENAI_AUTH_MODE=chatgpt_oauth`
+- `OPENAI_BEARER_TOKEN`
+- `OPENAI_RESEARCH_MODEL`
+- `SWARM_RESEARCH_PROVIDER=openai`
 - `GEMINI_API_KEY`
 - `SWARM_RESEARCH_PROVIDER=gemini`
+- `SWARM_RESEARCH_PROVIDER=vertex`
 - `SWARM_CODEX_BIN=codex`
 - `SWARM_WEB_SEARCH=1`
+
+Compatibility shortcuts:
+
+- Vercel AI Gateway: `AI_GATEWAY_API_KEY` or `VERCEL_OIDC_TOKEN`
+- Vertex AI Gemini: `GOOGLE_USE_VERTEXAI=1`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`
 
 ### 3. Start the primary swarm UI
 
@@ -66,7 +77,7 @@ At minimum, configure the providers you want the swarm to use. Typical options:
 npm run dev
 ```
 
-Open `http://localhost:3000` and click **Start Swarm**. The dashboard starts and controls the local swarm runtime directly; the Foundry sidecar is not required for this path.
+Open `http://localhost:3017` and click **Start Swarm**. The dashboard starts and controls the local swarm runtime directly; the Foundry sidecar is not required for this path.
 
 ### 4. Run from terminal instead
 
@@ -102,6 +113,45 @@ PowerShell entrypoint equivalents:
 
 The Foundry path is optional and does not power the primary Codex swarm loop.
 
+## Auth And Compatibility Notes
+
+- OpenAI platform requests still officially use API keys. In this repo, `chatgpt_oauth` means “use a bearer token from `OPENAI_BEARER_TOKEN` / `OPENAI_OAUTH_ACCESS_TOKEN`, or import the local Codex session from `~/.codex/auth.json`.”
+- Vercel AI Gateway compatibility is handled through the OpenAI-compatible path. If `AI_GATEWAY_API_KEY` or `VERCEL_OIDC_TOKEN` is set, the runtime defaults the OpenAI base URL to `https://ai-gateway.vercel.sh/v1`.
+- Vertex AI Gemini compatibility is handled through Google auth plus the Vertex OpenAI-compatible endpoint. Set `GOOGLE_USE_VERTEXAI=1` with `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`.
+
+## Unified MCP Support
+
+Swarm now supports two MCP configuration paths from the same `mcp-settings.json` file:
+
+- Direct MCP client entries under `mcpServers`
+- Docker MCP registry entries under `dockerRegistry`
+
+What the Docker-backed path does:
+
+- `type: server` manifests are launched as containerized stdio servers via `docker run`
+- `type: remote` manifests are connected over `streamable-http` or `sse`
+- Connected MCP tools are injected into the agent tool loop automatically
+- Wrapped tool names are exposed to the model as `mcp_<server>__<tool>`
+
+Starter example:
+
+- `mcp-settings.docker.example.json`
+
+Typical workflow:
+
+1. Clone `docker/mcp-registry`
+2. Copy `mcp-settings.docker.example.json` to `mcp-settings.json`
+3. Update `dockerRegistry.registryPath`
+4. Enable the servers you want, for example `docker-docs` or `ast-grep`
+5. Start the swarm normally; MCP tools are loaded at run start
+
+Notes and current limits:
+
+- Containerized servers require Docker Desktop / Docker Engine locally
+- Remote catalog entries using explicit `remote.headers` are supported directly
+- OAuth-heavy remote entries may still require manual header/token overrides instead of a full interactive OAuth flow
+- Docker registry `allowHosts` constraints are not yet enforced by Swarm's plain `docker run` adapter
+
 ## Multi-Model Router + Role Optimizer
 
 Built-in model evaluator/optimizer now assigns the most effective provider/model per role (`research`, `worker1`, `worker2`, `evaluator`, `coordinator`) and writes routing to:
@@ -126,10 +176,11 @@ npx tsx scripts/swarm-models.ts optimize --live
 Runtime behavior:
 
 - Swarm loads model routing at run start and applies per-role provider execution.
+- `SWARM_RESEARCH_PROVIDER` overrides the `research` role even when `config/model-routing.json` exists.
 - Providers supported in runtime:
   - `codex` (Codex CLI execution; OAuth handled by Codex login session)
-  - `openai` (`OPENAI_API_KEY` or `OPENAI_OAUTH_ACCESS_TOKEN`)
-  - `gemini` (`GEMINI_API_KEY` or Google OAuth/ADC)
+  - `openai` (`OPENAI_API_KEY`, bearer token, ChatGPT/Codex session import, or AI Gateway compatibility)
+  - `gemini` (`GEMINI_API_KEY`, Google OAuth/ADC, or Vertex AI compatibility)
 
 ## VS Code Integration (Copilot/Codex Friendly)
 
@@ -170,10 +221,10 @@ Or via PowerShell entrypoint:
 ```powershell
 .\run-swarm.ps1              # advanced CLI mode
 .\run-swarm.ps1 -Setup       # auth/API setup
-.\\run-swarm.ps1 -Status      # current persisted state
-.\\run-swarm.ps1 -Pause       # pause active run
-.\\run-swarm.ps1 -Resume      # resume active run
-.\\run-swarm.ps1 -RewindRound 2
+.\run-swarm.ps1 -Status      # current persisted state
+.\run-swarm.ps1 -Pause       # pause active run
+.\run-swarm.ps1 -Resume      # resume active run
+.\run-swarm.ps1 -RewindRound 2
 .\run-swarm.ps1 -Deploy      # one-click Vercel preview deploy
 .\run-swarm.ps1 -Legacy      # old direct script path
 ```
@@ -198,6 +249,14 @@ SWARM_CODEX_BIN=codex
 
 Gemini provider options (optional):
 
+- OpenAI research mode:
+
+```bash
+SWARM_RESEARCH_PROVIDER=openai
+SWARM_OPENAI_AUTH_MODE=chatgpt_oauth
+OPENAI_RESEARCH_MODEL=gpt-5.2
+```
+
 - API key mode:
 
 ```bash
@@ -216,6 +275,17 @@ GEMINI_MODEL=gemini-3-pro
 
 When `GOOGLE_USE_ADC=1`, the runtime attempts:
 `gcloud auth application-default print-access-token`.
+
+- Vertex AI Gemini mode:
+
+```bash
+SWARM_RESEARCH_PROVIDER=vertex
+GOOGLE_USE_VERTEXAI=1
+GOOGLE_USE_ADC=1
+GOOGLE_CLOUD_PROJECT=your-project
+GOOGLE_CLOUD_LOCATION=global
+VERTEX_AI_MODEL=gemini-2.5-flash
+```
 
 External web research adapter (optional):
 

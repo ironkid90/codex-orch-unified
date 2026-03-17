@@ -22,6 +22,67 @@ export interface RoutingConfigFile {
 
 const DEFAULT_ROUTING_FILE = path.join("config", "model-routing.json");
 
+function getDefaultResearchExecution(): RoleExecutionPreference {
+  const provider = (process.env.SWARM_RESEARCH_PROVIDER || "").trim().toLowerCase();
+  if (provider === "openai") {
+    return {
+      provider: "openai",
+      model:
+        process.env.OPENAI_RESEARCH_MODEL ||
+        process.env.OPENAI_SWARM_MODEL ||
+        process.env.OPENAI_MODEL ||
+        "gpt-5.2",
+      rationale: "Default research provider from SWARM_RESEARCH_PROVIDER=openai.",
+    };
+  }
+
+  if (
+    provider === "gemini" ||
+    provider === "vertex" ||
+    process.env.GEMINI_MODEL ||
+    process.env.GEMINI_SWARM_MODEL ||
+    process.env.VERTEX_AI_MODEL ||
+    process.env.GOOGLE_USE_VERTEXAI === "1" ||
+    process.env.GOOGLE_GENAI_USE_VERTEXAI === "1"
+  ) {
+    const model =
+      provider === "vertex"
+        ? process.env.VERTEX_AI_MODEL ||
+          process.env.GEMINI_SWARM_MODEL ||
+          process.env.GEMINI_MODEL ||
+          "gemini-2.5-flash"
+        : process.env.GEMINI_MODEL ||
+          process.env.GEMINI_SWARM_MODEL ||
+          process.env.VERTEX_AI_MODEL ||
+          "gemini-3.1-pro-preview";
+    return {
+      provider: "gemini",
+      model,
+      rationale:
+        provider === "vertex"
+          ? "Default research provider from SWARM_RESEARCH_PROVIDER=vertex."
+          : "Default research provider from Gemini environment.",
+    };
+  }
+
+  return {
+    provider: "codex",
+    model: process.env.SWARM_CODEX_MODEL || "codex-5.3",
+    rationale: "Default research provider from environment.",
+  };
+}
+
+function getForcedResearchExecution(): RoleExecutionPreference | null {
+  const provider = (process.env.SWARM_RESEARCH_PROVIDER || "").trim().toLowerCase();
+  if (provider === "openai" || provider === "gemini" || provider === "vertex") {
+    return {
+      ...getDefaultResearchExecution(),
+      rationale: "Research provider forced from SWARM_RESEARCH_PROVIDER.",
+    };
+  }
+  return null;
+}
+
 export function resolveRoutingConfigPath(workspace: string): string {
   const configured = process.env.SWARM_MODEL_ROUTING_FILE || DEFAULT_ROUTING_FILE;
   return path.isAbsolute(configured) ? configured : path.join(workspace, configured);
@@ -29,11 +90,7 @@ export function resolveRoutingConfigPath(workspace: string): string {
 
 export function defaultRoleExecution(agentId: AgentId): RoleExecutionPreference {
   if (agentId === "research") {
-    return {
-      provider: process.env.GEMINI_MODEL ? "gemini" : "codex",
-      model: process.env.GEMINI_MODEL || process.env.SWARM_CODEX_MODEL || "codex-5.3",
-      rationale: "Default research provider from environment.",
-    };
+    return getDefaultResearchExecution();
   }
   return {
     provider: "codex",
@@ -83,6 +140,12 @@ export function resolveRoleExecution(
   agentId: AgentId,
   routing: RoutingConfigFile | null,
 ): RoleExecutionPreference {
+  if (agentId === "research") {
+    const forced = getForcedResearchExecution();
+    if (forced) {
+      return forced;
+    }
+  }
   const configured = normalizeRoleExecution(routing?.assignments?.[agentId]);
   if (configured) {
     return configured;

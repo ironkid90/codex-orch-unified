@@ -8,9 +8,9 @@
   "scripts": {
     "bootstrap": "node scripts/dev/bootstrap.mjs",
     "doctor": "node scripts/dev/doctor.mjs",
-    "dev": "next dev",
-    "dev:dashboard": "next dev",
-    "dev:gui": "next dev",
+    "dev": "next dev --port 3017",
+    "dev:dashboard": "next dev --port 3017",
+    "dev:gui": "next dev --port 3017",
     "dev:foundry": "node scripts/dev/run-agent.mjs",
     "dev:agent": "npm run dev:foundry",
     "dev:cli": "tsx scripts/swarm-cli.ts run --mode local --max-rounds 3",
@@ -20,7 +20,7 @@
     "build:web": "next build",
     "build:all": "npm run typecheck && npm run build:web && npm run build:python",
     "build": "npm run build:all",
-    "start": "next start",
+    "start": "next start --port 3017",
     "swarm:setup": "tsx scripts/swarm-cli.ts setup",
     "swarm:run": "tsx scripts/swarm-cli.ts run",
     "swarm:status": "tsx scripts/swarm-cli.ts status",
@@ -43,6 +43,7 @@
     "openai": "^4.68.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "yaml": "^2.8.2",
     "zod": "^3.25.76"
   },
   "devDependencies": {
