@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { MemoryStatusWidget } from "@/app/components/MemoryStatusWidget";
 
 import type { RunMode, SwarmFeatures, SwarmRunState } from "@/lib/swarm/types";
 
@@ -503,6 +504,11 @@ export default function HomePage() {
             </button>
             {settingsMessage && <span className="control-center-message">{settingsMessage}</span>}
           </div>
+        </section>
+
+        {/* Global HAM Memory Status */}
+        <section className="glass-card">
+          <MemoryStatusWidget />
         </section>
 
         {/* Agent Pipeline */}

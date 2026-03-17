@@ -50,6 +50,7 @@ export function MemoryStatusWidget() {
   };
 
   const merge InboxEntry = async (entryId: string, targetFile: "decisions" | "patterns") => {
+  const mergeInboxEntry = async (entryId: string, targetFile: "decisions" | "patterns") => {
     try {
       const res = await fetch("/api/swarm/memory-refresh", {
         method: "POST",
