@@ -16,7 +16,7 @@ async function loadCodexHomeModule() {
 
 test("buildSwarmCodexConfig disables extra features and trusts the workspace", async () => {
   const codexHome = await loadCodexHomeModule();
-  const workspace = path.join("C:\\Users\\Gabi\\Documents\\GitHub", "codex-orch-unified");
+  const workspace = REPO_ROOT;
   const config = codexHome.buildSwarmCodexConfig(workspace);
 
   assert.match(config, /approval_policy = "on-request"/);
