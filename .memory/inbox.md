@@ -1,98 +1,55 @@
-# Inbox: Subagent Summary Updates
+# Inbox: Post-Task HAM Summaries
 
-Welcome to the Inbox — the queue for subagent-driven memory updates. Each agent (Copilot, Codex, Roo, VS Code) can append discoveries here. Entries flow from NEW → REVIEWED → MERGED to decisions.md or patterns.md.
+This file is the HAM write-back queue. After every task, append one compressed summary here. Durable architectural reasoning belongs in `decisions.md`; reusable implementation conventions belong in `patterns.md` after review.
 
----
+## Workflow
 
-## Example Entry: Initial HAM Setup — 2026-03-17
+- **NEW**: appended by an assistant and awaiting review.
+- **REVIEWED**: checked, clarified, and ready to merge.
+- **MERGED**: durable facts moved to `decisions.md` or `patterns.md`; keep a pointer in the entry.
 
-**Topic**: Hierarchical Agent Memory (HAM) scaffolding for token efficiency
+## Required Schema
 
-**Key Finding**: Structured memory design reduces per-task context by 40–95% depending on task scope.
-
-**Details**:
-- Root CLAUDE.md + scoped files: ~2,400 tokens (vs. 50–60K full project context)
-- Decisions.md: Captures "why" behind architecture (prevents rework)
-- Patterns.md: Reusable conventions (faster onboarding for new agents)
-- inbox.md: Async knowledge capture (agents don't block on review)
-- audit-log.md: Change transparency (who changed what, when, why)
-- baseline-snapshot.md: Token metrics & refresh strategy (track savings)
-
-**Status**: ✓ MERGED
-
-**Reviewer**: Copilot (initial setup)
-
-**Notes**: This established the HAM foundation. Next: wire into Codex, Roo, VS Code global config.
+See [MEMORY-PROTOCOL.md § Standard summary schema](./MEMORY-PROTOCOL.md#standard-summary-schema) for exact field requirements and usage guidance.
 
 ---
 
-## Template for New Entries
+## 2026-03-17T00:00:00Z — Copilot — Task 1: establish canonical HAM protocol and reduce CLAUDE.md DRY overlap
 
-Copy this template and append below when creating a new entry:
+**Timestamp**: 2026-03-17T00:00:00Z
+**Agent**: Copilot
+**Task**: Establish the canonical HAM protocol, reduce DRY overlap between CLAUDE.md and MEMORY-PROTOCOL.md, remove fragile hardcoded file citations, promote critical issues upfront, and add token methodology notes.
 
-```markdown
-## [Agent Name] — [YYYY-MM-DD]
+**Touched Paths**:
 
-**Topic**: [What was investigated? One line.]
+- `MEMORY-PROTOCOL.md` (created in prior task)
+- `CLAUDE.md`
+- `.memory/inbox.md`
+- `.memory/baseline-snapshot.md`
 
-**Key Finding**: [Single sentence outcome or insight.]
+**Actions Taken**:
 
-**Details**: 
-- Point 1
-- Point 2
-- Point 3 (optional)
+- Replaced duplicative Universal Memory Protocol prose in CLAUDE.md with a single-line pointer to MEMORY-PROTOCOL.md, reducing routing-doc bloat.
+- Moved critical issues (merge conflict markers in .gitignore, committed secrets in .kilocode/) from buried gotchas to prominent "🚨 CRITICAL ISSUES" section before architecture decisions.
+- Removed fragile hardcoded line-range citations (:63–67, :18, :107–114, :82–94) and replaced with file/component pointers that survive edits.
+- Renumbered remaining gotchas (Provider Interface Contract, capability-types.ts) for clarity.
+- Updated inbox schema reference to link to MEMORY-PROTOCOL instead of duplicating it.
 
-**Status**: [ ] NEW | [ ] REVIEWED | [x] MERGED
+**State Changes**:
 
-**Reviewer**: [Name or "Pending"]
+- CLAUDE.md is now purely routing-first with no protocol duplication.
+- Critical deployment/security issues are visible at a glance (not buried in gotchas list).
+- File citations are maintenance-friendly (no line numbers).
+- inbox.md schema overhead reduced from ~20 lines to a single pointer.
 
-**Notes**: [Optional context: limitations, follow-ups, related decisions]
-```
+**Insights/Decisions**:
 
-### Status Field Guide:
-- **NEW**: Just added; awaiting review
-- **REVIEWED**: Feedback collected; ready for merge
-- **MERGED**: Integrated into decisions.md or patterns.md (note which file + heading)
+- Routing docs should be compact; protocol contract lives once in MEMORY-PROTOCOL.md.
+- Critical issues need visual isolation (🚨 prefix + dedicated section) to prevent deployment surprises.
+- Line-number citations in docs are fragile; component/file references are preferred.
 
-### Reviewer Guidelines:
-- Check: Is this finding grounded in actual code/conversation?
-- Check: Is this actionable for future agents?
-- Check: Does it belong in decisions (architectural "why") or patterns (reusable "how")?
-- Sign off: Add reviewer name + date when moving to REVIEWED
+**Follow-ups**:
 
----
+- None (Quality review task complete).
 
-## How to Merge an Entry
-
-When an entry reaches REVIEWED status, the Memory Steward will:
-
-1. Extract key facts from the entry
-2. Create a new decision or pattern (or update existing)
-3. Update the entry: `**Status**: [x] MERGED` + add `**Merged To**: decisions.md#decision-name`
-
-Example merge note:
-```
-**Status**: [x] MERGED
-**Merged To**: decisions.md#Decision-Node-25-Compatibility
-**Merged By**: Copilot (2026-03-18)
-```
-
----
-
-## Subagent Checklist
-
-Before appending an entry here, make sure:
-- [ ] Finding is grounded in code, conversation, or verified repo memory
-- [ ] It's actionable for _future_ agents (not just this task)
-- [ ] It's independent of current PR/task (survives even if not merged)
-- [ ] Topic is clear (search-friendly for future discovery)
-- [ ] No secrets, sensitive paths, or credentials included
-
----
-
-## Refresh Notes
-
-- Check inbox daily (or trigger after major architectural work)
-- Merged entries are removed from inbox (they live in decisions.md or patterns.md now)
-- If an entry stays NEW for 2+ weeks, reach out to originating agent for clarification
-
+**Status**: [x] NEW | [ ] REVIEWED | [ ] MERGED

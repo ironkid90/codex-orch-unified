@@ -6,6 +6,10 @@
 
 ---
 
+## Universal Memory Protocol
+
+**All agents must follow the read/write contract in `MEMORY-PROTOCOL.md`** before planning or editing this repo. Canonical HAM entrypoints: root/scoped `CLAUDE.md` + `.memory/decisions.md` / `.memory/patterns.md` / `.memory/inbox.md`. Do not duplicate long-form summaries; update HAM sources instead.
+
 ## Bounded Context Index
 
 Navigate to detailed context for each major subsystem:
@@ -47,6 +51,14 @@ Navigate to detailed context for each major subsystem:
 
 ---
 
+## 🚨 CRITICAL ISSUES (Resolve Before Next Commit)
+
+### Committed Secrets: .kilocode/ Directory  
+- Contains live GitHub PAT in config
+- **Action**: Rotate token immediately, gitignore `.kilocode/`, remove from HEAD via Git history cleanup
+
+---
+
 ## Recent Decisions & Gotchas
 
 ### 🏗️ Architecture Decisions
@@ -68,7 +80,7 @@ Navigate to detailed context for each major subsystem:
 
 4. **Graph Type Dual Support** (Backward-Compatible)  
    - Graphs accept `entryNodeId: string` (legacy) **or** `entryNodes: string[]` (new)
-   - `graph-executor.ts` line 40–51 handles fallback logic; schema enforces at-least-one presence
+   - See `graph-executor.ts` fallback logic; schema enforces at-least-one presence
    - **Gotcha**: Old graphs still work but migrate them to `entryNodes` for multi-start support
 
 5. **MCP Runtime Node 25+ Hardening** (~Q4 2025)  
@@ -77,43 +89,28 @@ Navigate to detailed context for each major subsystem:
 
 ### ⚠️ Known Issues & Gotchas
 
-6. **Merge Conflict Markers in .gitignore** (CRITICAL)  
-   - File contains unresolved conflict markers (<<<<<<<, =======, >>>>>>>)
-   - **Action**: Resolve before next commit; may cause unexpected ignore behavior
-   - **Citation**: .gitignore:63–67
-
-7. **Committed Secrets: .kilocode/mcp.json** (SECURITY)  
-   - Contains a live GitHub PAT; entire `.kilocode/` directory should be gitignored
-   - **Action**: Rotate token, add `.kilocode/` to .gitignore, remove from HEAD
-   - **Citation**: .kilocode/mcp.json:18
-
-8. **Provider Interface Contract** (Type Safety)  
+1. **Provider Interface Contract** (Type Safety)  
    - Provider must expose: `type`, `config`, `complete()`, `stream()` methods (no name/chat/ProviderResponse export)
    - Test fixtures using different shapes will fail at runtime
-   - **Citation**: lib/providers/types.ts:107–114
+   - See `lib/providers/types.ts` for contract definition
 
-9. **Syntax Error in capability-types.ts** (HISTORICAL)  
-   - TIER_COST_CEILINGS object was missing closing brace (line 87), causing duplicate COMPLEXITY_TIER_MAP
+2. **Syntax Error in capability-types.ts** (HISTORICAL)  
+   - TIER_COST_CEILINGS object was missing closing brace, causing duplicate COMPLEXITY_TIER_MAP
    - **Status**: Fixed; document to prevent recurrence
-   - **Citation**: lib/swarm/capability-types.ts:82–94
+   - See `lib/swarm/capability-types.ts` for current structure
 
 ---
 
 ## Token-Saving Routing Strategy
 
-This **root CLAUDE.md** serves as a hierarchical entry point, avoiding context bloat by distributing detailed knowledge across six bounded-context files. Agents **should**:
+This **root CLAUDE.md** is the routing-first entrypoint for bounded-context work. Read it first, then load only the scoped `CLAUDE.md` files and `.memory/*` sources required by the task.
 
-1. **Start here** for navigating unfamiliar tasks (2–3 min read, ~250 tokens)
-2. **Jump to relevant subscoped file** (e.g., `lib/swarm/CLAUDE.md`) for deep work in that subsystem
-3. **Avoid reading all files** unless designing cross-subsystem changes
+Agents **should**:
 
-Subscoped files (Task 2) will contain:
-- ✅ Callgraph & dependency maps
-- ✅ Common patterns (e.g., factory pattern in providers, message-passing in graph-executor)
-- ✅ Testing strategies & gotchas per subsystem
-- ✅ Links to key source files with brief annotations
-
-**Expected savings**: ~60% reduction in context load for single-subsystem tasks vs. reading full codebase overview.
+1. **Start here** for repo-level navigation.
+2. **Jump to relevant subscoped file(s)** (for example, `lib/swarm/CLAUDE.md`) for deep work in the subsystem being touched.
+3. **Consult `.memory/decisions.md` and `.memory/patterns.md`** only when the task needs architecture or pattern history.
+4. **Avoid loading unrelated subsystems** unless the task is genuinely cross-cutting.
 
 ---
 

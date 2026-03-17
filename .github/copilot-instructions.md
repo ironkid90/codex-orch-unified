@@ -1,5 +1,15 @@
 # Copilot Instructions for `codex-orch`
 
+## Memory Protocol & Hierarchical Context (HAM)
+
+Before planning or editing, consult the Hierarchical Agent Memory (HAM) by reading [MEMORY-PROTOCOL.md](../MEMORY-PROTOCOL.md). It defines:
+
+- Mandatory pre-execution context loading order
+- Canonical post-task summary schema
+- Routing to HAM files (root `CLAUDE.md`, scoped `CLAUDE.md`, `.memory/decisions.md`, `.memory/patterns.md`)
+
+After every task, append a summary to `.memory/inbox.md` following the standard schema.
+
 ## Project Purpose
 
 `codex-orch` is a hybrid orchestration workspace with:

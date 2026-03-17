@@ -78,6 +78,18 @@ Required operating rules:
 - Keep a living todo list in `${WORKSPACE_PATH}/${TODO_FILE}`. Update it before and after each meaningful action.
 - Report token usage and verification results in the final round summary.
 
+## Memory-First Workflow
+
+**Before planning or executing any task**, follow the [Mandatory execution order](MEMORY-PROTOCOL.md#mandatory-execution-order) in MEMORY-PROTOCOL.md to consult the Hierarchical Agent Memory (HAM).
+
+This memory-first approach ensures context consistency and reduces token spend by reusing stored context rather than regenerating it.
+
+## Post-Task Summary Requirement
+
+**After every task completion**, append a compressed summary to `.memory/inbox.md` using the standard schema defined in [MEMORY-PROTOCOL.md](MEMORY-PROTOCOL.md#standard-summary-schema).
+
+Durable architectural "why" findings are later merged into `.memory/decisions.md`; durable implementation "how" findings are merged into `.memory/patterns.md`.
+
 Issue context:
 - Identifier: `{{ issue.identifier }}`
 - Title: `{{ issue.title }}`

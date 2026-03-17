@@ -1,7 +1,7 @@
 {
   "name": "Swarm Orchestrator with Global HAM",
   "description": "Roo configuration for Swarm orchestrator project with hierarchical agent memory integration.",
-  "projectRoot": ".",
+  "projectRoot": ".",  "protocol": "./MEMORY-PROTOCOL.md",
   "primaryContext": {
     "path": "./CLAUDE.md",
     "description": "Root hierarchical context file with routing to 6 scoped subsystems"
@@ -63,5 +63,6 @@
     ".git",
     "runs",
     "batch"
-  ]
+  ],
+  "_note": "Memory and execution behavior defined in MEMORY-PROTOCOL.md (canonical). All agents must follow mandatory context loading and post-task summary append."
 }

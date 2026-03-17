@@ -2,6 +2,10 @@
 
 Established March 17, 2026 — Token efficiency and scope boundaries for Hierarchical Agent Memory system.
 
+**2026 Refresh Schedule**: Quarterly on `2026-06-30`, `2026-09-30`, `2026-12-31`.
+
+HAM is intended to be the canonical compressed repository for cross-assistant context in `codex-orch-unified`, not a duplicate knowledge store. Update root/scoped `CLAUDE.md` files and `.memory/*` entrypoints instead of maintaining parallel memory summaries.
+
 ---
 
 ## Scoping: Bounded Contexts
@@ -43,6 +47,14 @@ The HAM system organizes knowledge around six natural subsystems:
 ---
 
 ## Token Efficiency Metrics (Baseline: March 2026)
+
+### Token-Estimate Methodology
+
+Token counts use Claude's tokenizer (tiktoken-compatible) as a lightweight proxy:
+- Each file is measured individually via word count × 1.3 (rough token/word ratio for TypeScript/Markdown).
+- Tables and structured data conservatively assume 1 token per 4 characters.
+- Estimates are baseline/typical; actual counts vary ±5–10% with context composition and API load.
+- **Purpose**: Track relative savings, not absolute precision. Refresh quarterly.
 
 ### Context Windows
 
@@ -128,6 +140,18 @@ The HAM system organizes knowledge around six natural subsystems:
 - **Audience**: Memory Steward (operationalization)
 - **Retention**: Permanent (one per quarter; archive old snapshots)
 
+### 2026 Refresh Schedule
+
+| Artifact | Next Refresh | 2026 Cadence |
+|----------|--------------|--------------|
+| Root `CLAUDE.md` | `2026-03-24` | Weekly while routing or major decisions are changing |
+| Scoped `CLAUDE.md` files | `2026-03-31` | Every 2 weeks for active subsystems |
+| `.memory/decisions.md` | `2026-04-01` | Event-driven on each accepted architecture decision + monthly sanity review |
+| `.memory/patterns.md` | `2026-04-01` | Monthly on the first working day |
+| `.memory/inbox.md` | `2026-03-20` | Review every Friday and after major task batches |
+| `.memory/audit-log.md` | `2026-04-01` | Continuous append + monthly skim |
+| `.memory/baseline-snapshot.md` | `2026-06-30` | Quarterly: `2026-06-30`, `2026-09-30`, `2026-12-31` |
+
 ---
 
 ## Next Steps & Implementation Roadmap
@@ -136,11 +160,12 @@ The HAM system organizes knowledge around six natural subsystems:
 - [x] Create 5 core memory files (decisions.md, patterns.md, inbox.md, audit-log.md, baseline-snapshot.md)
 - [x] Establish file formats and templates
 - [x] Document token reduction models
+- [x] Define `MEMORY-PROTOCOL.md` as the canonical cross-assistant HAM contract
 
-### Phase 2: Scoped Documentation (Planned)
-- [ ] Create Root CLAUDE.md (project overview)
-- [ ] Create Scoped CLAUDE.md for each subsystem (lib/swarm/, lib/providers/, lib/tools/, config/, app/, foundry_agents/)
-- [ ] Link to memory scopes from each CLAUDE.md
+### Phase 2: Scoped Documentation (Established)
+- [x] Publish root `CLAUDE.md` (project overview + routing)
+- [x] Publish scoped `CLAUDE.md` files for `lib/swarm/`, `lib/providers/`, `lib/tools/`, `config/`, `app/`, and `foundry_agents/`
+- [ ] Keep routing and scoped summaries aligned with active subsystem changes
 
 ### Phase 3: Agent Integration (Planned)
 - [ ] Wire .memory/ into Copilot workspace settings (global context)
@@ -173,6 +198,12 @@ Designate one person/team as **Memory Steward** responsible for:
 - Quarterly baseline-snapshot.md update (token tracking)
 - Periodic CLAUDE.md refresh (navigation + context)
 
+**Refresh Cadence & Ownership**:
+- **Codex Swarm Team** owns root `CLAUDE.md` and scoped subsystem `CLAUDE.md` files; refresh weekly if active feature work, monthly otherwise.
+- **Memory Steward** owns `.memory/*` files; inbox.md reviewed every Friday and after major task batches, decisions/patterns refreshed on the cadence in the 2026 Refresh Schedule table above.
+- **Quarterly review** (end of Jun/Sep/Dec) of baseline-snapshot.md timings and token estimates; adjust subsystem boundaries if needed.
+- If a subsystem becomes dormant, halt scoped `CLAUDE.md` refreshes; resume on next active sprint.
+
 ### Refresh Automation Ideas
 
 ```bash
@@ -201,7 +232,7 @@ Designate one person/team as **Memory Steward** responsible for:
 ## FAQ
 
 **Q: How do I know which CLAUDE.md files to load for a task?**
-A: Root CLAUDE.md always (2,400 tokens). Add scoped CLAUDE.md for subsystems you're working on. For multi-subsystem work, load 2–3 scoped files; if approaching token limit, fall back to decisions.md + patterns.md instead.
+A: Root `CLAUDE.md` always. Add only the scoped `CLAUDE.md` files for the subsystems you're touching. For multi-subsystem work, load 2–3 scoped files; if approaching token limits, fall back to `decisions.md` + `patterns.md` for cross-cutting history.
 
 **Q: What if my change doesn't fit into existing decisions or patterns?**
 A: Create a NEW entry in inbox.md. Memory Steward will review and decide whether it merits a new decision/pattern or is task-specific context.

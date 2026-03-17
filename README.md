@@ -17,6 +17,15 @@ The primary swarm currently provides:
 - Provider/model routing from `config/model-routing.json`
 - Built-in MCP tool loading from `mcp-settings.json`, including Docker MCP registry manifests
 
+## Universal Memory Protocol
+
+All agents working in this repository must follow the unified memory workflow defined in [MEMORY-PROTOCOL.md](MEMORY-PROTOCOL.md):
+
+- **Before coding:** Read `CLAUDE.md` and relevant scoped context from `.memory/`
+- **After task:** Append a compressed summary to `.memory/inbox.md`
+
+This single-source-of-truth protocol ensures consistent agent behavior across Copilot, Gemini, Roo, and CLI workflows.
+
 ## Current Runtime Status
 
 What is implemented now:

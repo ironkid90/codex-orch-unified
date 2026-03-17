@@ -26,7 +26,6 @@ The orchestrator is a **fixed fan-out/fan-in loop**: each round spawns research,
 ## Known Issues
 
 - Graph DSL executor not wired to active runtime; legacy engine.ts loop handles single fixed topology
-- Syntax errors in capability-types.ts (line ~87, missing brace) prevent build
 - Control-queue persistence lacks atomic transaction guarantees; mid-crash control requests may orphan
 
 ## Recent Changes
