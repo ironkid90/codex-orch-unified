@@ -79,6 +79,8 @@ npm run dev
 
 Open `http://localhost:3017` and click **Start Swarm**. The dashboard starts and controls the local swarm runtime directly; the Foundry sidecar is not required for this path.
 
+If required MCP/API settings are missing, the dashboard **Control Center** prompts for them interactively and writes updates to `.env.local` (and `mcp-settings.json` for registry path changes) before allowing a run to start.
+
 ### 4. Run from terminal instead
 
 ```bash
@@ -151,6 +153,16 @@ Notes and current limits:
 - Remote catalog entries using explicit `remote.headers` are supported directly
 - OAuth-heavy remote entries may still require manual header/token overrides instead of a full interactive OAuth flow
 - Docker registry `allowHosts` constraints are not yet enforced by Swarm's plain `docker run` adapter
+
+### Dashboard Control Center (hardening + setup)
+
+The dashboard now includes a dedicated **Control Center** that:
+
+- Scans enabled MCP settings for missing environment variables and registry path problems
+- Blocks run start when blocking setup issues are present
+- Lets you provide missing keys interactively (saved to `.env.local`)
+- Lets you update `dockerRegistry.registryPath` interactively
+- Surfaces hardening warnings (for example known package/runtime compatibility issues)
 
 ## Multi-Model Router + Role Optimizer
 

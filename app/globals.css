@@ -758,6 +758,59 @@ body {
   font-style: italic;
 }
 
+.control-center-panel {
+  gap: 14px;
+}
+
+.control-center-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.control-center-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  background: var(--glass);
+}
+
+.control-center-key {
+  font-size: 0.72rem;
+  color: var(--text-label);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.control-center-hint {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+.control-center-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.control-center-message {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.control-center-issues {
+  margin-top: 6px;
+}
+
+.control-center-issues.warn {
+  border-left: 2px solid rgba(245, 158, 11, 0.6);
+  padding-left: 10px;
+}
+
 /* ─── Section Headers ─── */
 .section-head {
   font-size: 0.78rem;

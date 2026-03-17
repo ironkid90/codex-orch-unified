@@ -463,12 +463,63 @@ function normalizeEnv(env: NodeJS.ProcessEnv | Record<string, string>): Record<s
     return normalized;
 }
 
+function parseEnvFileLine(line: string): { key: string; value: string } | null {
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (!match) {
+        return null;
+    }
+
+    const key = match[1];
+    let value = match[2] ?? "";
+    if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+    }
+
+    return { key, value };
+}
+
 export class McpClientManager {
     private servers: Map<string, ConnectedServer> = new Map();
+
+    private async hydrateWorkspaceEnv(workspaceRoot: string): Promise<void> {
+        const envFilePaths = [
+            path.join(workspaceRoot, ".env"),
+            path.join(workspaceRoot, ".env.local"),
+        ];
+
+        for (const envFilePath of envFilePaths) {
+            let content = "";
+            try {
+                content = await fs.readFile(envFilePath, "utf-8");
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                    continue;
+                }
+                console.warn(`Failed reading env file ${envFilePath}:`, error);
+                continue;
+            }
+
+            for (const line of content.split(/\r?\n/)) {
+                if (!line.trim() || line.trimStart().startsWith("#")) {
+                    continue;
+                }
+
+                const parsed = parseEnvFileLine(line);
+                if (!parsed) {
+                    continue;
+                }
+
+                if (parsed.value.trim()) {
+                    process.env[parsed.key] = parsed.value;
+                }
+            }
+        }
+    }
 
     async loadSettings(workspaceRoot: string, settingsPath?: string): Promise<McpSettings | null> {
         const configPath = settingsPath || path.join(workspaceRoot, "mcp-settings.json");
         try {
+            await this.hydrateWorkspaceEnv(workspaceRoot);
             const content = await fs.readFile(configPath, "utf-8");
             const json = JSON.parse(content);
 
@@ -619,11 +670,10 @@ export class McpClientManager {
             throw new Error(`MCP server ${serverName} not found or not connected`);
         }
         const normalizedArgs = Object.keys(args).length ? args : {};
-        const result = await server.client.callTool({
+        return server.client.callTool({
             name: toolName,
             arguments: normalizedArgs,
         });
-        return result;
     }
 
     async closeAll(): Promise<void> {
