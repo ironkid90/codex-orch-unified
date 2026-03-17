@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { RunMode, SwarmFeatures, SwarmRunState } from "@/lib/swarm/types";
+import type { PendingControlRequest, RunMode, SwarmFeatures, SwarmRunState } from "@/lib/swarm/types";
 
 interface StateResponse {
   state: SwarmRunState;
@@ -78,6 +78,22 @@ function formatDurationMs(value?: number): string {
   return `${(value / 1000).toFixed(2)}s`;
 }
 
+function formatAgeFromNow(iso?: string): string {
+  if (!iso) return "—";
+  const elapsedMs = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return "—";
+  if (elapsedMs < 2_000) return "just now";
+  if (elapsedMs < 60_000) return `${Math.round(elapsedMs / 1_000)}s ago`;
+  if (elapsedMs < 3_600_000) return `${Math.round(elapsedMs / 60_000)}m ago`;
+  return `${Math.round(elapsedMs / 3_600_000)}h ago`;
+}
+
+function describeControlAction(action: PendingControlRequest["action"]): string {
+  if (action === "pause") return "Pause requested";
+  if (action === "resume") return "Resume requested";
+  return "Rewind requested";
+}
+
 const AGENT_COLORS: Record<string, string> = {
   research: "from-research",
   worker1: "from-worker1",
@@ -129,7 +145,11 @@ export default function HomePage() {
     if (!data.capabilities.supportsLocalExecution) setMode("demo");
   }, []);
 
-  useEffect(() => { void loadState(); }, [loadState]);
+  useEffect(() => {
+    void loadState().catch((err) => {
+      setError(err instanceof Error ? err.message : String(err));
+    });
+  }, [loadState]);
 
   useEffect(() => { void loadControlCenter(); }, [loadControlCenter]);
 
@@ -141,11 +161,16 @@ export default function HomePage() {
         const nextState = JSON.parse(message.data) as SwarmRunState;
         setState(nextState);
         setError(null);
-      } catch { /* ignore */ }
+      } catch {
+        // ignore malformed SSE payloads during reconnects
+      }
     };
     source.addEventListener("state", onState);
     source.onerror = () => setError("Stream interrupted. Reconnecting...");
-    return () => { source.removeEventListener("state", onState); source.close(); };
+    return () => {
+      source.removeEventListener("state", onState);
+      source.close();
+    };
   }, []);
 
   const startRun = useCallback(async () => {
@@ -173,24 +198,27 @@ export default function HomePage() {
     }
   }, [features, loadControlCenter, loadState, maxRounds, mode]);
 
-  const controlRun = useCallback(async (action: "pause" | "resume" | "rewind", round?: number) => {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/swarm/control", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action, round }),
-      });
-      const payload = (await res.json()) as { error?: string };
-      if (!res.ok) throw new Error(payload.error || `Failed: ${action}`);
-      await loadState();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }, [loadState]);
+  const controlRun = useCallback(
+    async (action: "pause" | "resume" | "rewind", round?: number) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/swarm/control", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action, round }),
+        });
+        const payload = (await res.json()) as { error?: string };
+        if (!res.ok) throw new Error(payload.error || `Failed: ${action}`);
+        await loadState();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [loadState],
+  );
 
   const saveControlCenter = useCallback(async () => {
     setSettingsBusy(true);
@@ -251,6 +279,12 @@ export default function HomePage() {
   const isRunning = Boolean(state?.running);
   const latestCheckpointRound = state?.checkpoints.at(-1)?.round;
   const agents = state ? Object.values(state.agents) : [];
+  const pendingControls = state?.pendingControls ?? [];
+  const latestPendingControl = pendingControls.at(-1);
+  const pendingPause = pendingControls.find((control) => control.action === "pause");
+  const activeStep = state?.activity.activeStep;
+  const activeGate = state?.activity.activeGate;
+  const heartbeatAt = state?.activity.lastHeartbeatAt;
   const ioSnapshot = state?.ioCoordinator;
   const ioCompressionRatio =
     ioSnapshot && ioSnapshot.contextOptimization.originalEstimatedChars > 0
@@ -260,14 +294,29 @@ export default function HomePage() {
         )
       : 0;
 
-  const toggleFeature = useCallback((feature: keyof SwarmFeatures) => {
-    if (isRunning) return;
-    setFeatures((prev) => ({ ...prev, [feature]: !prev[feature] }));
-  }, [isRunning]);
+  const liveIndicator = latestPendingControl
+    ? `⌛ ${describeControlAction(latestPendingControl.action)}`
+    : state?.paused
+      ? "⏸ Paused"
+      : isRunning
+        ? "● Live"
+        : "○ Idle";
+
+  const canPause = supportsPauseResume && isRunning && !state?.paused && !pendingPause;
+  const canResume = supportsPauseResume && isRunning && Boolean(state?.paused);
+  const canRewind = supportsRewind && Boolean(state?.paused) && Boolean(latestCheckpointRound) && pendingControls.length === 0;
+  const heartbeatState = heartbeatAt ? formatAgeFromNow(heartbeatAt) : "no heartbeat yet";
+
+  const toggleFeature = useCallback(
+    (feature: keyof SwarmFeatures) => {
+      if (isRunning) return;
+      setFeatures((prev) => ({ ...prev, [feature]: !prev[feature] }));
+    },
+    [isRunning],
+  );
 
   return (
     <div className="platform">
-      {/* ═══ HEADER ═══ */}
       <header className="header">
         <div className="header-brand">
           <div className="header-logo">CX</div>
@@ -284,7 +333,7 @@ export default function HomePage() {
           <span className="sep">|</span>
           <span>Round: {state?.currentRound ?? 0}/{state?.maxRounds ?? "—"}</span>
           <span className="sep">|</span>
-          <span>{state?.paused ? "⏸ Paused" : isRunning ? "● Live" : "○ Idle"}</span>
+          <span>{liveIndicator}</span>
         </div>
 
         <div className="header-controls">
@@ -320,17 +369,22 @@ export default function HomePage() {
               {isRunning ? "● Running" : hasBlockingSetup ? "⚠ Setup Required" : "▶ Start Swarm"}
             </button>
 
-            {supportsPauseResume && isRunning && !state?.paused && (
+            {canPause && (
               <button className="btn btn-secondary" onClick={() => void controlRun("pause")} disabled={busy}>
                 ⏸ Pause
               </button>
             )}
-            {supportsPauseResume && isRunning && state?.paused && (
+            {!canPause && supportsPauseResume && isRunning && !state?.paused && pendingPause && (
+              <button className="btn btn-secondary" disabled>
+                ⌛ Pause Pending
+              </button>
+            )}
+            {canResume && (
               <button className="btn btn-secondary" onClick={() => void controlRun("resume")} disabled={busy}>
                 ▶ Resume
               </button>
             )}
-            {supportsRewind && state?.paused && latestCheckpointRound && (
+            {canRewind && (
               <button
                 className="btn btn-secondary"
                 onClick={() => void controlRun("rewind", latestCheckpointRound)}
@@ -343,7 +397,6 @@ export default function HomePage() {
         </div>
       </header>
 
-      {/* ═══ SIDEBAR — Agent Roster ═══ */}
       <aside className="sidebar">
         <div className="sidebar-label">Agents</div>
         {agents.map((agent) => (
@@ -368,23 +421,23 @@ export default function HomePage() {
           </div>
         ))}
 
-        <div className="sidebar-label" style={{ marginTop: 12 }}>Checkpoints</div>
+        <div className="sidebar-label" style={{ marginTop: 12 }}>
+          Checkpoints
+        </div>
         {state?.checkpoints.length ? (
           state.checkpoints.map((cp) => (
             <div key={cp.round} className="agent-card">
-              <div className="agent-detail">
-                R{cp.round} · {cp.restorable ? "✓ Restorable" : "✗ Locked"}
-              </div>
+              <div className="agent-detail">R{cp.round} · {cp.restorable ? "✓ Restorable" : "✗ Locked"}</div>
             </div>
           ))
         ) : (
-          <div className="empty-text" style={{ padding: "0 10px" }}>No checkpoints</div>
+          <div className="empty-text" style={{ padding: "0 10px" }}>
+            No checkpoints
+          </div>
         )}
       </aside>
 
-      {/* ═══ MAIN CONTENT ═══ */}
       <main className="main-content">
-        {/* Error Banner */}
         {error && (
           <div className="error-banner">
             <strong>Error</strong>
@@ -392,7 +445,47 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Feature Toggles */}
+        <section className="glass-card">
+          <div className="glass-card-head">
+            <h2>Runtime Status</h2>
+            <span className={`badge ${pendingControls.length ? "warn" : isRunning ? "ok" : "info"}`}>
+              {pendingControls.length ? `${pendingControls.length} pending` : isRunning ? "healthy" : "idle"}
+            </span>
+          </div>
+          <div className="round-list">
+            <div className="round-row">
+              <div className="round-detail">
+                Active gate: {activeGate || "—"}
+                <br />
+                Active step: {activeStep || "—"}
+                {state?.activity.activeAgentId ? ` · ${state.activity.activeAgentId}` : ""}
+                <br />
+                Heartbeat: {formatTime(heartbeatAt)} · {heartbeatState}
+              </div>
+            </div>
+            {state?.pauseReason && (
+              <div className="round-row">
+                <div className="round-detail">Pause reason: {state.pauseReason}</div>
+              </div>
+            )}
+            {pendingControls.length ? (
+              pendingControls.map((control) => (
+                <div key={control.id} className="round-row">
+                  <div className="round-detail">
+                    {describeControlAction(control.action)}
+                    <br />
+                    {formatTime(control.requestedAt)} · {control.source || "operator"}
+                    {control.round ? ` · target round ${control.round}` : ""}
+                    {control.reason ? ` · ${control.reason}` : ""}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="empty-text">No pending operator controls.</p>
+            )}
+          </div>
+        </section>
+
         <section className="glass-card feature-panel">
           <div className="glass-card-head">
             <h2>Runtime Features</h2>
@@ -413,99 +506,6 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* Control Center */}
-        <section className="glass-card control-center-panel">
-          <div className="glass-card-head">
-            <h2>Control Center</h2>
-            <span className={`badge ${hasBlockingSetup ? "err" : warningIssues.length ? "warn" : "ok"}`}>
-              {hasBlockingSetup ? "setup required" : warningIssues.length ? "harden warnings" : "healthy"}
-            </span>
-          </div>
-
-          <div className="round-list">
-            <div className="round-row">
-              <div className="round-detail">
-                MCP settings: {controlCenter?.mcpSettingsFound ? "found" : "missing"}
-                {controlCenter?.mcpSettingsPath ? ` · ${controlCenter.mcpSettingsPath}` : ""}
-                <br />
-                Enabled servers: {controlCenter?.enabledServers.length ?? 0}
-                {controlCenter?.dockerRegistry.enabledServers.length
-                  ? ` · Registry servers: ${controlCenter.dockerRegistry.enabledServers.length}`
-                  : ""}
-              </div>
-            </div>
-          </div>
-
-          {blockingIssues.length > 0 && (
-            <ul className="round-notes control-center-issues">
-              {blockingIssues.map((issue) => (
-                <li key={issue}>{issue}</li>
-              ))}
-            </ul>
-          )}
-
-          {warningIssues.length > 0 && (
-            <ul className="round-notes control-center-issues warn">
-              {warningIssues.map((issue) => (
-                <li key={issue}>{issue}</li>
-              ))}
-            </ul>
-          )}
-
-          {(missingEnvVars.length > 0 || controlCenter?.dockerRegistry.enabledServers.length) && (
-            <div className="control-center-grid">
-              {missingEnvVars.map((entry) => (
-                <label key={entry.name} className="control-center-item">
-                  <span className="control-center-key">{entry.name}</span>
-                  <span className="control-center-hint">Required by {entry.requiredBy[0] || "MCP config"}</span>
-                  <input
-                    className="input"
-                    type="password"
-                    autoComplete="off"
-                    value={secretInputs[entry.name] || ""}
-                    onChange={(event) =>
-                      setSecretInputs((previous) => ({
-                        ...previous,
-                        [entry.name]: event.target.value,
-                      }))
-                    }
-                    placeholder={`Enter ${entry.name}`}
-                  />
-                </label>
-              ))}
-
-              {controlCenter?.dockerRegistry.enabledServers.length ? (
-                <label className="control-center-item">
-                  <span className="control-center-key">dockerRegistry.registryPath</span>
-                  <span className="control-center-hint">Path to your cloned docker/mcp-registry folder</span>
-                  <input
-                    className="input"
-                    type="text"
-                    value={registryPathInput}
-                    onChange={(event) => setRegistryPathInput(event.target.value)}
-                    placeholder="C:/Users/you/Documents/GitHub/mcp-registry"
-                  />
-                </label>
-              ) : null}
-            </div>
-          )}
-
-          <div className="control-center-actions">
-            <button
-              className="btn btn-secondary"
-              onClick={() => void saveControlCenter()}
-              disabled={settingsBusy || !canSaveControlCenter}
-            >
-              {settingsBusy ? "Saving…" : "Save Settings"}
-            </button>
-            <button className="btn btn-secondary" onClick={() => void loadControlCenter()} disabled={settingsBusy}>
-              Refresh
-            </button>
-            {settingsMessage && <span className="control-center-message">{settingsMessage}</span>}
-          </div>
-        </section>
-
-        {/* Agent Pipeline */}
         <section className="glass-card">
           <div className="glass-card-head">
             <h2>Agent Pipeline</h2>
@@ -515,12 +515,15 @@ export default function HomePage() {
             {agents.map((agent, i) => (
               <div key={agent.id} style={{ display: "flex", alignItems: "center" }}>
                 {i > 0 && <div className="pipeline-connector" />}
-                <div className={`pipeline-agent ${agent.phase === 'running' ? 'active' : ''}`}>
+                <div className={`pipeline-agent ${agent.phase === "running" ? "active" : ""}`}>
                   <div className="agent-name" title={agent.id}>
                     <span className={`status-dot ${agent.phase}`} />
                     {agent.label}
                   </div>
-                  <div className="agent-detail" style={{ marginTop: 6, display: "flex", justifyContent: "center", gap: "6px", alignItems: "center" }}>
+                  <div
+                    className="agent-detail"
+                    style={{ marginTop: 6, display: "flex", justifyContent: "center", gap: "6px", alignItems: "center" }}
+                  >
                     <span className={`phase-pill ${agent.phase}`}>{agent.phase}</span>
                     {agent.pdaStage && <span className="pda-badge">{agent.pdaStage}</span>}
                   </div>
@@ -535,9 +538,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* Main Grid: Thought Stream + Events */}
         <div className="content-grid">
-          {/* Thought Stream */}
           <section className="glass-card">
             <div className="glass-card-head">
               <h2>Agent Thought Stream</h2>
@@ -546,10 +547,7 @@ export default function HomePage() {
             <div className="thought-stream">
               {latestMessages.length ? (
                 latestMessages.map((item, index) => (
-                  <article
-                    key={`${item.timestampUtc}-${index}`}
-                    className={`thought-bubble ${AGENT_COLORS[item.from] || "from-system"}`}
-                  >
+                  <article key={`${item.timestampUtc}-${index}`} className={`thought-bubble ${AGENT_COLORS[item.from] || "from-system"}`}>
                     <div className="thought-meta">
                       <span className="thought-agent-tag">{item.from}</span>
                       → {item.to}
@@ -567,7 +565,6 @@ export default function HomePage() {
             </div>
           </section>
 
-          {/* Activity Feed */}
           <section className="glass-card">
             <div className="glass-card-head">
               <h2>Event Timeline</h2>
@@ -594,9 +591,7 @@ export default function HomePage() {
           </section>
         </div>
 
-        {/* Secondary Grid: Rounds + Diagnostics */}
         <div className="content-grid equal">
-          {/* Round Decisions */}
           <section className="glass-card">
             <div className="glass-card-head">
               <h2>Round Decisions</h2>
@@ -613,8 +608,7 @@ export default function HomePage() {
                         <span className={`badge ${badge.cls}`}>{badge.text}</span>
                       </div>
                       <div className="round-detail">
-                        Worker-2: {round.worker2Decision || "—"} · Evaluator: {round.evaluatorStatus || "—"} ·
-                        Coordinator: {round.coordinatorStatus || "—"} · Lint: {round.lintPassed === false ? "FAIL" : "PASS"}
+                        Worker-2: {round.worker2Decision || "—"} · Evaluator: {round.evaluatorStatus || "—"} · Coordinator: {round.coordinatorStatus || "—"} · Lint: {round.lintPassed === false ? "FAIL" : "PASS"}
                       </div>
                       {round.changedFiles && round.changedFiles.length > 0 && (
                         <div className="round-detail" style={{ marginTop: 4 }}>
@@ -637,7 +631,6 @@ export default function HomePage() {
             </div>
           </section>
 
-          {/* Diagnostics */}
           <section className="glass-card">
             <div className="glass-card-head">
               <h2>Diagnostics</h2>
@@ -647,13 +640,11 @@ export default function HomePage() {
             <div className="round-list">
               <div className="round-row">
                 <div className="round-detail">
-                  Calls: {ioSnapshot?.totalCalls ?? 0} · Active: {ioSnapshot?.activeCalls ?? 0} ·
-                  Retries: {ioSnapshot?.totalRetries ?? 0} · Failures: {ioSnapshot?.failureCount ?? 0}
+                  Calls: {ioSnapshot?.totalCalls ?? 0} · Active: {ioSnapshot?.activeCalls ?? 0} · Retries: {ioSnapshot?.totalRetries ?? 0} · Failures: {ioSnapshot?.failureCount ?? 0}
                   <br />
                   Avg latency: {formatDurationMs(ioSnapshot?.averageDurationMs)} · Max latency: {formatDurationMs(ioSnapshot?.maxDurationMs)}
                   <br />
-                  Context saved: {ioSnapshot?.contextOptimization.estimatedTokensSaved ?? 0} est tokens ·
-                  Compression: {(ioCompressionRatio * 100).toFixed(1)}%
+                  Context saved: {ioSnapshot?.contextOptimization.estimatedTokensSaved ?? 0} est tokens · Compression: {(ioCompressionRatio * 100).toFixed(1)}%
                 </div>
               </div>
               {ioSnapshot?.lastError && (
@@ -673,8 +664,7 @@ export default function HomePage() {
                     <div className="round-detail">
                       {operation.name}
                       <br />
-                      Calls: {operation.callCount} · Retries: {operation.retryCount} ·
-                      Avg: {formatDurationMs(operation.averageDurationMs)} · Max: {formatDurationMs(operation.maxDurationMs)}
+                      Calls: {operation.callCount} · Retries: {operation.retryCount} · Avg: {formatDurationMs(operation.averageDurationMs)} · Max: {formatDurationMs(operation.maxDurationMs)}
                     </div>
                   </div>
                 ))
