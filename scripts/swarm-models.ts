@@ -7,6 +7,7 @@ import path from "node:path";
 import dotenv from "dotenv";
 import OpenAI from "openai";
 
+import { resolveGeminiAuth, resolveOpenAIAuth } from "../lib/providers/auth";
 import type { AgentId } from "../lib/swarm/types";
 
 type ProviderId = "codex" | "openai" | "gemini";
@@ -124,7 +125,7 @@ function inferCapabilities(provider: ProviderId, model: string): CapabilityVecto
 function loadCandidates(): ModelCandidate[] {
   const codexModel = process.env.SWARM_CODEX_MODEL || "codex-5.3";
   const openAiModel = process.env.OPENAI_SWARM_MODEL || "gpt-5.2";
-  const geminiModel = process.env.GEMINI_SWARM_MODEL || "gemini-3.1-pro-preview";
+  const geminiModel = process.env.VERTEX_AI_MODEL || process.env.GEMINI_SWARM_MODEL || "gemini-3.1-pro-preview";
   const geminiFast = process.env.GEMINI_SWARM_FAST_MODEL || "gemini-3.1-flash-preview";
 
   return [
@@ -190,15 +191,14 @@ async function probeCodex(candidate: ModelCandidate): Promise<ProbeResult> {
 }
 
 async function probeOpenAI(candidate: ModelCandidate): Promise<ProbeResult> {
-  const apiKey = process.env.OPENAI_API_KEY || "";
-  const oauthToken = process.env.OPENAI_OAUTH_ACCESS_TOKEN || "";
-  if (!apiKey && !oauthToken) {
+  const auth = await resolveOpenAIAuth();
+  if (!auth.apiKey && !auth.bearerToken) {
     return {
       candidateId: candidate.id,
       provider: candidate.provider,
       model: candidate.model,
       available: false,
-      detail: "Missing OPENAI_API_KEY / OPENAI_OAUTH_ACCESS_TOKEN",
+      detail: `Missing OpenAI auth (${auth.source}).`,
     };
   }
   if (!LIVE_PROBE) {
@@ -212,8 +212,8 @@ async function probeOpenAI(candidate: ModelCandidate): Promise<ProbeResult> {
   }
   const started = Date.now();
   try {
-    if (apiKey) {
-      const client = new OpenAI({ apiKey, baseURL: process.env.OPENAI_BASE_URL || undefined });
+    if (auth.apiKey) {
+      const client = new OpenAI({ apiKey: auth.apiKey, baseURL: auth.baseUrl || undefined });
       const response = await client.responses.create({
         model: candidate.model,
         input: "Return exactly: ok",
@@ -230,11 +230,11 @@ async function probeOpenAI(candidate: ModelCandidate): Promise<ProbeResult> {
       };
     }
 
-    const response = await fetch(`${process.env.OPENAI_BASE_URL || "https://api.openai.com/v1"}/responses`, {
+    const response = await fetch(`${auth.baseUrl}/responses`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${oauthToken}`,
+        authorization: `Bearer ${auth.bearerToken}`,
       },
       body: JSON.stringify({
         model: candidate.model,
@@ -264,25 +264,20 @@ async function probeOpenAI(candidate: ModelCandidate): Promise<ProbeResult> {
 }
 
 async function probeGemini(candidate: ModelCandidate): Promise<ProbeResult> {
-  const apiKey = process.env.GEMINI_API_KEY || "";
-  const oauthToken = process.env.GOOGLE_OAUTH_ACCESS_TOKEN || "";
-  const useAdc = process.env.GOOGLE_USE_ADC === "1";
-  let token = oauthToken;
+  const cfg = await resolveGeminiAuth({
+    modelOverride: candidate.model,
+    workspace: ROOT,
+  });
 
-  if (!apiKey && !token && useAdc) {
-    const tokenResult = await runCommand("gcloud", ["auth", "application-default", "print-access-token"], 20000);
-    if (tokenResult.code === 0) {
-      token = tokenResult.stdout.trim();
-    }
-  }
-
-  if (!apiKey && !token) {
+  if (!cfg.apiKey && !cfg.oauthToken) {
     return {
       candidateId: candidate.id,
       provider: candidate.provider,
       model: candidate.model,
       available: false,
-      detail: "Missing GEMINI_API_KEY / GOOGLE_OAUTH_ACCESS_TOKEN / ADC token",
+      detail: cfg.useVertexAi
+        ? "Missing Google OAuth/ADC token for Vertex AI."
+        : "Missing GEMINI_API_KEY / GOOGLE_OAUTH_ACCESS_TOKEN / ADC token.",
     };
   }
   if (!LIVE_PROBE) {
@@ -297,12 +292,45 @@ async function probeGemini(candidate: ModelCandidate): Promise<ProbeResult> {
 
   const started = Date.now();
   try {
-    const endpointBase = process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta";
-    const endpoint = `${endpointBase}/models/${encodeURIComponent(candidate.model)}:generateContent`;
-    const url = apiKey ? `${endpoint}?key=${encodeURIComponent(apiKey)}` : endpoint;
+    if (cfg.useVertexAi) {
+      if (!cfg.vertexBaseUrl || !cfg.vertexModel || !cfg.oauthToken) {
+        return {
+          candidateId: candidate.id,
+          provider: candidate.provider,
+          model: candidate.model,
+          available: false,
+          latencyMs: Date.now() - started,
+          detail: "Vertex AI Gemini requires GOOGLE_CLOUD_PROJECT/LOCATION and Google OAuth/ADC credentials.",
+        };
+      }
+      const response = await fetch(`${cfg.vertexBaseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${cfg.oauthToken}`,
+        },
+        body: JSON.stringify({
+          model: cfg.vertexModel,
+          messages: [{ role: "user", content: "Return exactly: ok" }],
+          max_tokens: 32,
+          temperature: 0.1,
+        }),
+      });
+      return {
+        candidateId: candidate.id,
+        provider: candidate.provider,
+        model: candidate.model,
+        available: response.ok,
+        latencyMs: Date.now() - started,
+        detail: response.ok ? "Vertex AI Gemini live probe succeeded." : `Vertex AI Gemini probe failed (${response.status}).`,
+      };
+    }
+
+    const endpoint = `${cfg.baseUrl}/models/${encodeURIComponent(candidate.model)}:generateContent`;
+    const url = cfg.apiKey ? `${endpoint}?key=${encodeURIComponent(cfg.apiKey)}` : endpoint;
     const headers: Record<string, string> = { "content-type": "application/json" };
-    if (token) {
-      headers.authorization = `Bearer ${token}`;
+    if (cfg.oauthToken) {
+      headers.authorization = `Bearer ${cfg.oauthToken}`;
     }
     const response = await fetch(url, {
       method: "POST",
