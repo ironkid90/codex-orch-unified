@@ -546,7 +546,7 @@ function updateRuntimeActivity(patch: Partial<SwarmRuntimeActivity>, emit = true
 }
 
 function canApplyControlImmediately(state: SwarmRunState): boolean {
-  return !state.activity.activeAgentId && !state.activity.activeStep;
+  return !state.activity.activeAgentId && !state.activity.activeStep && !state.activity.activeGate;
 }
 
 function beginRuntimeHeartbeat(agentId: AgentId, activeStep: string): () => void {
