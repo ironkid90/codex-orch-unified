@@ -1,0 +1,16 @@
+{
+  "qdrant": {
+    "host": "localhost",
+    "port": 6333,
+    "defaultCollection": "workspace",
+    "embeddingModel": "all-MiniLM-L6-v2",
+    "vectorSize": 384
+  },
+  "collections": {
+    "workspace": {
+      "description": "All source files from the codex-orch-unified workspace",
+      "embeddingModel": "all-MiniLM-L6-v2",
+      "chunkSize": 400
+    }
+  }
+}

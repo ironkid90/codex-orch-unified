@@ -120,13 +120,28 @@ Subscoped files (Task 2) will contain:
 ## Quick Navigation
 
 | Task Type | Start Here | Then Read |
-|-----------|-----------|-----------|
+| --------- | ---------- | --------- |
 | 🕹️ Workflow execution, graph dispatch | [lib/swarm/CLAUDE.md](./lib/swarm/CLAUDE.md) | engine.ts, graph-executor.ts |
 | 🤖 Add new model, change routing | [lib/providers/CLAUDE.md](./lib/providers/CLAUDE.md) | factory.ts, types.ts |
 | 🔧 Add new tool, fix execution | [lib/tools/CLAUDE.md](./lib/tools/CLAUDE.md) | index.ts, types.ts |
 | ⚙️ Change config, env vars | [config/CLAUDE.md](./config/CLAUDE.md) | model-routing.json, schema files |
 | 📊 Dashboard feature, API route | [app/CLAUDE.md](./app/CLAUDE.md) | api/, page.tsx |
 | 🐍 Python agent integration | [foundry_agents/CLAUDE.md](./foundry_agents/CLAUDE.md) | Sidecar docs |
+| 🔍 Semantic code search | qdrantSearchTool / qdrant_tool.py | config/qdrant.json, skills/qdrant-vector-search/ |
+
+---
+
+## Qdrant Vector Search (MANDATORY for all agents)
+
+A local Qdrant vector database runs at **`http://localhost:6333`** (Docker). Collection: `workspace`.
+
+**Before editing any file, search Qdrant first:**
+
+- TypeScript: `qdrantSearchTool` — registered in `lib/tools/index.ts`, implemented in `lib/tools/qdrant-search.ts`
+- Python: `from foundry_agents.qdrant_tool import QdrantTool; QdrantTool().search("query")`
+- Re-index: `python scripts/qdrant_ingest.py --dir . --recreate`
+
+Skill spec: `skills/qdrant-vector-search/SKILL.md`
 
 ---
 

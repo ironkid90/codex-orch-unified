@@ -2,9 +2,10 @@ import { EditFileTool } from "./edit-file";
 import { ExecuteShellTool } from "./execute-shell";
 import { ReadFileTool } from "./read-file";
 import { SearchFilesTool } from "./search-files";
+import { qdrantSearchTool } from "./qdrant-search";
 import type { Tool, ToolContext, ToolRegistry, ToolResult } from "./types";
 
-const DEFAULT_TOOLS: Tool[] = [ReadFileTool, EditFileTool, ExecuteShellTool, SearchFilesTool];
+const DEFAULT_TOOLS: Tool[] = [ReadFileTool, EditFileTool, ExecuteShellTool, SearchFilesTool, qdrantSearchTool as unknown as Tool];
 
 export function getDefaultTools(): Tool[] {
   return [...DEFAULT_TOOLS];
@@ -44,3 +45,4 @@ export * from "./edit-file";
 export * from "./execute-shell";
 export * from "./read-file";
 export * from "./search-files";
+export * from "./qdrant-search";

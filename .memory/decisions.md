@@ -1,5 +1,33 @@
 # Architectural Decisions Log
 
+## [2025] Decision: Qdrant as Universal Workspace Vector Search Layer
+
+**Context**: The workspace grows large (hundreds of files). Agents repeatedly rediscover the same patterns and helpers because there is no fast semantic lookup. We needed a zero-latency, always-available embedding search that works for every agent runtime (TypeScript swarm, Python sidecar, Gemini CLI, Copilot).
+
+**Options Considered**:
+
+- **A) File grep + AST walk**: Fast for exact matches, terrible for semantic queries.
+- **B) Cloud embedding API (e.g., Pinecone)**: Network latency, cost, no offline support.
+- **Chosen: Local Qdrant (Docker, port 6333)**: Near-instant semantic retrieval, no external dependency, single `workspace` collection, re-index with `scripts/qdrant_ingest.py`.
+
+**Rationale**:
+
+- Qdrant runs already (Docker container, always-on).
+- Python sidecar (`foundry_agents/qdrant_tool.py`) and TypeScript wrapper (`lib/tools/qdrant-search.ts`) cover every agent runtime.
+- Collection schema is kept simple (file_path + chunk text) to ease re-indexing.
+- All agent instruction files (CLAUDE.md, GEMINI.md, AGENTS.md, .copilot.json) now mandate a Qdrant search before editing files.
+
+**Outcome**:
+
+- `lib/tools/qdrant-search.ts` registered in `lib/tools/index.ts`.
+- `foundry_agents/qdrant_tool.py` available for Python agents.
+- `scripts/qdrant_ingest.py` for full re-index: `python scripts/qdrant_ingest.py --dir . --recreate`.
+- Skill documented in `skills/qdrant-vector-search/SKILL.md`.
+
+**Related Files**: lib/tools/qdrant-search.ts, foundry_agents/qdrant_tool.py, scripts/qdrant_ingest.py, config/qdrant.json, skills/qdrant-vector-search/SKILL.md
+
+---
+
 ## [2025-Q4] Decision: Unified MCP Support Architecture (Docker + Direct)
 
 **Context**: Early swarm design needed flexibility in how MCP tools are loaded—Docker containers vs. direct process execution. Different scenarios (CI/CD, local dev, production) have different constraints.
