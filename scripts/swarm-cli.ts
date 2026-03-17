@@ -554,6 +554,18 @@ async function statusCommand(): Promise<void> {
   if (state.pauseReason) {
     console.log(`pauseReason: ${state.pauseReason}`);
   }
+  if (state.pendingControls.length) {
+    console.log(`pendingControls: ${state.pendingControls.map((control) => control.action).join(", ")}`);
+  }
+  if (state.activity.activeGate) {
+    console.log(`activeGate: ${state.activity.activeGate}`);
+  }
+  if (state.activity.activeStep) {
+    console.log(`activeStep: ${state.activity.activeStep}`);
+  }
+  if (state.activity.lastHeartbeatAt) {
+    console.log(`lastHeartbeatAt: ${state.activity.lastHeartbeatAt}`);
+  }
   const latest = state.rounds.at(-1);
   if (latest) {
     console.log(`latestRound: ${latest.round}`);

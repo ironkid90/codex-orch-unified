@@ -1,24 +1,26 @@
-import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 
 import {
   AGENT_IDS,
   DEFAULT_FEATURES,
+  createAgentDefaults,
+  createIoCoordinatorDefaults,
+  createRuntimeActivityDefaults,
   type AgentId,
   type AgentMessage,
   type CheckpointInfo,
   type EnsembleResult,
-  createIoCoordinatorDefaults,
   type IoCoordinatorSnapshot,
   type LintResult,
   type RoundSummary,
-  type SwarmFeatures,
   type RunMode,
   type SwarmEvent,
+  type SwarmFeatures,
   type SwarmRunState,
-  createAgentDefaults,
+  type SwarmRuntimeActivity,
 } from "./types";
-import { loadPersistedRuntimeState, persistRuntimeState } from "./runtime-state";
+import { loadPersistedRuntimeState, persistRuntimeState, snapshotQueuedControlRequests } from "./runtime-state";
 
 const MAX_EVENTS = 500;
 
@@ -42,12 +44,52 @@ function createInitialState(): SwarmRunState {
     ensembles: [],
     events: [],
     errors: [],
+    pendingControls: [],
+    activity: createRuntimeActivityDefaults(),
     ioCoordinator: createIoCoordinatorDefaults(),
   };
 }
 
 function cloneState(state: SwarmRunState): SwarmRunState {
   return JSON.parse(JSON.stringify(state)) as SwarmRunState;
+}
+
+function normalizeIoCoordinator(snapshot?: Partial<IoCoordinatorSnapshot>): IoCoordinatorSnapshot {
+  const defaults = createIoCoordinatorDefaults();
+  return {
+    ...defaults,
+    ...snapshot,
+    operations: snapshot?.operations ?? defaults.operations,
+    contextOptimization: {
+      ...defaults.contextOptimization,
+      ...(snapshot?.contextOptimization ?? {}),
+    },
+    ...(snapshot?.lastError ? { lastError: { ...snapshot.lastError } } : {}),
+  };
+}
+
+function normalizeState(state?: Partial<SwarmRunState>): SwarmRunState {
+  const initial = createInitialState();
+  if (!state) {
+    return initial;
+  }
+
+  return {
+    ...initial,
+    ...state,
+    features: { ...DEFAULT_FEATURES, ...(state.features ?? {}) },
+    agents: { ...createAgentDefaults(), ...(state.agents ?? {}) },
+    rounds: state.rounds ?? initial.rounds,
+    checkpoints: state.checkpoints ?? initial.checkpoints,
+    messages: state.messages ?? initial.messages,
+    lintResults: state.lintResults ?? initial.lintResults,
+    ensembles: state.ensembles ?? initial.ensembles,
+    events: state.events ?? initial.events,
+    errors: state.errors ?? initial.errors,
+    pendingControls: state.pendingControls ?? initial.pendingControls,
+    activity: { ...createRuntimeActivityDefaults(), ...(state.activity ?? {}) },
+    ioCoordinator: normalizeIoCoordinator(state.ioCoordinator),
+  };
 }
 
 class SwarmStore {
@@ -57,16 +99,39 @@ class SwarmStore {
 
   constructor() {
     this.hydrateFromDisk();
+    this.refreshPendingControls(false);
   }
 
   getState(): SwarmRunState {
     this.hydrateFromDisk();
+    this.refreshPendingControls(false);
     return cloneState(this.state);
   }
 
   subscribe(listener: (event: SwarmEvent) => void): () => void {
     this.emitter.on("event", listener);
     return () => this.emitter.off("event", listener);
+  }
+
+  refreshPendingControls(emit = false): void {
+    const nextPendingControls = snapshotQueuedControlRequests();
+    const changed = JSON.stringify(this.state.pendingControls) !== JSON.stringify(nextPendingControls);
+    if (!changed) {
+      return;
+    }
+
+    this.state.pendingControls = nextPendingControls;
+    if (emit && this.state.running && this.state.runId) {
+      this.emitTransientStateUpdate("run.control_queue");
+    }
+  }
+
+  setRuntimeActivity(patch: Partial<SwarmRuntimeActivity>, emit = true): void {
+    this.state.activity = { ...this.state.activity, ...patch };
+    this.persistSnapshot();
+    if (emit && this.state.running && this.state.runId) {
+      this.emitTransientStateUpdate("run.activity");
+    }
   }
 
   startRun(opts: {
@@ -101,6 +166,8 @@ class SwarmStore {
       ensembles: [],
       events: [],
       errors: [],
+      pendingControls: [],
+      activity: { lastHeartbeatAt: startedAt },
       ioCoordinator: createIoCoordinatorDefaults(),
     };
 
@@ -118,6 +185,11 @@ class SwarmStore {
     this.state.paused = false;
     this.state.pauseReason = undefined;
     this.state.endedAt = new Date().toISOString();
+    this.state.pendingControls = [];
+    this.state.activity = {
+      ...createRuntimeActivityDefaults(),
+      lastHeartbeatAt: this.state.endedAt,
+    };
     for (const agentId of AGENT_IDS) {
       if (this.state.agents[agentId].phase === "running") {
         this.state.agents[agentId].phase = "completed";
@@ -137,6 +209,11 @@ class SwarmStore {
     this.state.paused = false;
     this.state.pauseReason = undefined;
     this.state.endedAt = new Date().toISOString();
+    this.state.pendingControls = [];
+    this.state.activity = {
+      ...createRuntimeActivityDefaults(),
+      lastHeartbeatAt: this.state.endedAt,
+    };
     const message = error instanceof Error ? error.message : String(error);
     this.state.errors.push(message);
 
@@ -165,10 +242,7 @@ class SwarmStore {
     this.persistSnapshot();
   }
 
-  setAgentState(
-    agentId: AgentId,
-    patch: Partial<SwarmRunState["agents"][AgentId]>,
-  ): void {
+  setAgentState(agentId: AgentId, patch: Partial<SwarmRunState["agents"][AgentId]>): void {
     this.state.agents[agentId] = { ...this.state.agents[agentId], ...patch };
     this.persistSnapshot();
   }
@@ -275,7 +349,7 @@ class SwarmStore {
     if (!persisted) {
       return;
     }
-    this.state = persisted.state;
+    this.state = normalizeState(persisted.state);
     const maxEventId = this.state.events.reduce((highest, event) => Math.max(highest, event.id), 0);
     this.eventCounter = Math.max(this.eventCounter, maxEventId);
   }
