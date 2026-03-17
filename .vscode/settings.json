@@ -18,4 +18,33 @@
                     ],
                     "python.testing.pytestEnabled": false,
                     "python.testing.unittestEnabled": true
+ },
+    "copilot.memory.enabled": true,
+    "copilot.memory.path": "./.memory",
+    "copilot.memory.hierarchicalContext": "./CLAUDE.md",
+    "agent-memory.memoryDirectory": "./.memory",
+    "agent-memory.scopedContextDirectory": ".",
+    "agent-memory.inboxFile": "./.memory/inbox.md",
+    "agent-memory.decisionsFile": "./.memory/decisions.md",
+    "agent-memory.patternsFile": "./.memory/patterns.md",
+    "agent-memory.auditLogFile": "./.memory/audit-log.md",
+    "agent-memory.baselineFile": "./.memory/baseline-snapshot.md",
+    "agent-memory.hierarchicalContext": {
+        "rootFile": "./CLAUDE.md",
+        "scopedFiles": [
+            "./lib/swarm/CLAUDE.md",
+            "./lib/providers/CLAUDE.md",
+            "./lib/tools/CLAUDE.md",
+            "./config/CLAUDE.md",
+            "./app/CLAUDE.md",
+            "./foundry_agents/CLAUDE.md"
+        ]
+    },
+    "agent-memory.tokenBudget": 8000,
+    "agent-memory.refreshStrategy": {
+        "onStartup": true,
+        "onSave": ["decisions.md", "patterns.md"],
+        "autoRefreshInterval": "1h"
+    },
+    "agent-memory.subagentSummarizationEnabled": true
 }

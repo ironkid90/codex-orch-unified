@@ -1,0 +1,36 @@
+#!/bin/bash
+# Codex Configuration for Swarm Orchestrator with Global HAM
+# This file configures Codex to use the hierarchical agent memory structure
+
+# Primary context file (root)
+export CODEX_PRIMARY_CONTEXT="./CLAUDE.md"
+
+# Memory configuration
+export CODEX_MEMORY_TYPE="hierarchical"
+export CODEX_MEMORY_BASE_DIR="./.memory"
+export CODEX_MEMORY_DECISIONS="./.memory/decisions.md"
+export CODEX_MEMORY_PATTERNS="./.memory/patterns.md"
+export CODEX_MEMORY_INBOX="./.memory/inbox.md"
+export CODEX_MEMORY_AUDIT_LOG="./.memory/audit-log.md"
+export CODEX_MEMORY_BASELINE="./.memory/baseline-snapshot.md"
+
+# Scoped context files (used based on current working directory)
+export CODEX_SCOPED_CONTEXTS="\
+./lib/swarm/CLAUDE.md:\
+./lib/providers/CLAUDE.md:\
+./lib/tools/CLAUDE.md:\
+./config/CLAUDE.md:\
+./app/CLAUDE.md:\
+./foundry_agents/CLAUDE.md"
+
+# Token optimization settings
+export CODEX_TOKEN_BUDGET="8000"  # ~60% of typical prompt budget
+export CODEX_USE_SCOPED_CONTEXT_ONLY="false"  # Use full hierarchical routing
+export CODEX_ENABLE_MEMORY_SUMMARIZATION="true"
+
+# MCP integration (optional)
+export CODEX_MCP_CONFIG="./mcp-settings.json"
+
+# Logging and debugging
+export CODEX_MEMORY_LOG_LEVEL="INFO"
+export CODEX_MEMORY_REFRESH_ON_LOAD="true"

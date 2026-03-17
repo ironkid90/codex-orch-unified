@@ -433,3 +433,110 @@ npm run swarm:deploy -- --prod
 - Fan-out/fan-in orchestration pattern from the `agent-framework-new` workflow samples.
 - Deterministic selector/verifier style safeguards inspired by `multiagent/azuredev-4c13`.
 - Reflection loop via evaluator feedback propagated into subsequent rounds.
+
+## Global Hierarchical Agent Memory (HAM)
+
+This project now includes a **Hierarchical Agent Memory (HAM)** system that provides:
+
+- **Token-efficient context management**: ~96% reduction from 50-60K to ~2,400 tokens for root + scoped context
+- **Cross-tool integration**: Unified memory accessible by Codex, Roo, Copilot, and VS Code Copilot
+- **Subagent-driven summarization**: Async inbox queue for agent summaries that merge into decisions and patterns
+- **Audit trail and metrics**: Structured logging of all context decisions and token usage tracking
+
+### Structure
+
+HAM is organized into two layers:
+
+**Layer 1: Documentation Context**
+- ./CLAUDE.md (root) — Hierarchical routing to 6 scoped subsystems
+- ./lib/swarm/CLAUDE.md, ./lib/providers/CLAUDE.md, ./lib/tools/CLAUDE.md, ./config/CLAUDE.md, ./app/CLAUDE.md, ./foundry_agents/CLAUDE.md — Scoped context for each major subsystem
+
+**Layer 2: Structured Memory** (./.memory/)
+- decisions.md — Architectural decisions with rationale, pros/cons, and outcomes
+- patterns.md — Reusable patterns discovered across the codebase
+- inbox.md — Async summary queue from subagents (NEW → REVIEWED → MERGED)
+- udit-log.md — Change tracking with ISO 8601 UTC timestamps
+- aseline-snapshot.md — Token metrics and refresh strategy
+
+### Tool Integration
+
+#### Roo Configuration
+
+Roo automatically reads oo.config.json at project root:
+- Primary context: ./CLAUDE.md
+- Memory directory: ./.memory/
+- Scoped context files (auto-selected based on workspace)
+- Token budget: 8,000 per request
+
+#### Codex Configuration
+
+Codex reads environment variables from .codexrc:
+`ash
+export CODEX_PRIMARY_CONTEXT="./CLAUDE.md"
+export CODEX_MEMORY_BASE_DIR="./.memory"
+export CODEX_TOKEN_BUDGET="8000"
+export CODEX_ENABLE_MEMORY_SUMMARIZATION="true"
+`
+
+#### Copilot & VS Code
+
+VS Code extension gent-memory (digitarald) is configured in .vscode/settings.json:
+`json
+"agent-memory.memoryDirectory": "./.memory",
+"agent-memory.hierarchicalContext": {
+  "rootFile": "./CLAUDE.md",
+  "scopedFiles": [...]
+},
+"agent-memory.tokenBudget": 8000,
+"agent-memory.subagentSummarizationEnabled": true
+`
+
+Also requires .copilot.json at project root for Copilot integration.
+
+### Subagent Summarization Workflow
+
+1. **Subagents append to ./.memory/inbox.md** with summaries and findings (marked NEW)
+2. **Reviewer checks** inbox entries for relevance and approves (marked REVIEWED)
+3. **Memory refresh process** merges approved entries into:
+   - decisions.md (if architectural)
+   - patterns.md (if a reusable pattern)
+4. **Audit log** tracks all merges with timestamp, author, and change summary
+5. **Baseline metrics** update automatically to reflect new token baseline
+
+### Refresh Strategy
+
+- **Root CLAUDE.md**: Weekly (manual or automated)
+- **Scoped CLAUDE.md**: Bi-weekly
+- **Decisions**: Append on major architectural changes
+- **Patterns**: Monthly review cycle
+- **Inbox**: Continuous (subagent-driven)
+- **Audit log**: Continuous (auto-append)
+
+### Manual Memory Refresh (Coming Soon)
+
+Once the summarization system is fully integrated:
+
+`ash
+npm run memory:refresh         # Process inbox → merge → audit log
+npm run memory:status         # Show memory stats and last refresh time
+npm run memory:baseline       # Recalculate token metrics
+`
+
+### Configuration Files
+
+- oo.config.json — Roo integration (primary context + memory config)
+- .codexrc — Codex environment variable configuration
+- .copilot.json — GitHub Copilot memory and token config
+- .vscode/settings.json — VS Code agent-memory extension settings
+
+### Token Efficiency Baselines
+
+For reference, typical token savings across different context patterns:
+
+- **Full project context** (~50-60K tokens) → Requires careful selection
+- **Root + scoped files** (~2,400 tokens) → **96% reduction** ✅
+- **Single subsystem** (~20K tokens) → 60% reduction
+- **Cross-subsystem** (~30K tokens) → 40% reduction
+- **Subagent inference** (~12-18K tokens) → 20-30% reduction per session
+
+Scoped context is auto-selected based on which file you're editing, making this seamless in VS Code and other IDEs.

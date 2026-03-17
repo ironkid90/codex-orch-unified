@@ -1,0 +1,67 @@
+{
+  "name": "Swarm Orchestrator with Global HAM",
+  "description": "Roo configuration for Swarm orchestrator project with hierarchical agent memory integration.",
+  "projectRoot": ".",
+  "primaryContext": {
+    "path": "./CLAUDE.md",
+    "description": "Root hierarchical context file with routing to 6 scoped subsystems"
+  },
+  "memoryConfig": {
+    "type": "hierarchical",
+    "baseDirectory": "./.memory",
+    "files": {
+      "decisions": "./.memory/decisions.md",
+      "patterns": "./.memory/patterns.md",
+      "inbox": "./.memory/inbox.md",
+      "auditLog": "./.memory/audit-log.md",
+      "baseline": "./.memory/baseline-snapshot.md"
+    },
+    "refreshStrategy": {
+      "decisions": "append-on-major-decisions",
+      "patterns": "monthly-review",
+      "inbox": "continuous-subagent-input",
+      "auditLog": "continuous-tracking",
+      "root": "weekly-refresh",
+      "scoped": "bi-weekly-refresh"
+    }
+  },
+  "scopedContextFiles": [
+    {
+      "path": "./lib/swarm/CLAUDE.md",
+      "scope": "Core Swarm Engine & MCP Integration"
+    },
+    {
+      "path": "./lib/providers/CLAUDE.md",
+      "scope": "Provider Layer (AI, Storage, Monitoring)"
+    },
+    {
+      "path": "./lib/tools/CLAUDE.md",
+      "scope": "Tool Framework & Extensions"
+    },
+    {
+      "path": "./config/CLAUDE.md",
+      "scope": "Configuration & Environment Setup"
+    },
+    {
+      "path": "./app/CLAUDE.md",
+      "scope": "Dashboard & Frontend"
+    },
+    {
+      "path": "./foundry_agents/CLAUDE.md",
+      "scope": "Reference Agent Implementations"
+    }
+  ],
+  "rules": {
+    "rulesDirectory": "./.roo/",
+    "priority": ["rules-architect", "rules-code", "rules-ask", "rules-debug"]
+  },
+  "excludePaths": [
+    "node_modules",
+    ".next",
+    "dist",
+    "build",
+    ".git",
+    "runs",
+    "batch"
+  ]
+}
