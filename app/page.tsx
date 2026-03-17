@@ -104,12 +104,16 @@ export default function HomePage() {
   const [registryPathInput, setRegistryPathInput] = useState("");
 
   const loadControlCenter = useCallback(async () => {
-    const res = await fetch("/api/swarm/control-center", { cache: "no-store" });
-    if (!res.ok) throw new Error(`Failed to load control center: ${res.status}`);
-    const data = (await res.json()) as ControlCenterResponse;
-    setControlCenter(data.controlCenter);
-    if (data.controlCenter.dockerRegistry.registryPath) {
-      setRegistryPathInput(data.controlCenter.dockerRegistry.registryPath);
+    try {
+      const res = await fetch("/api/swarm/control-center", { cache: "no-store" });
+      if (!res.ok) throw new Error(`Failed to load control center: ${res.status}`);
+      const data = (await res.json()) as ControlCenterResponse;
+      setControlCenter(data.controlCenter);
+      if (data.controlCenter.dockerRegistry.registryPath) {
+        setRegistryPathInput(data.controlCenter.dockerRegistry.registryPath);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   }, []);
 

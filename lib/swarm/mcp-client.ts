@@ -478,6 +478,28 @@ function parseEnvFileLine(line: string): { key: string; value: string } | null {
     return { key, value };
 }
 
+function getKnownCompatibilitySkipReason(serverName: string, config: ServerConfig): string | null {
+    const nodeMajor = Number(process.versions.node.split(".")[0] || "0");
+    if (Number.isNaN(nodeMajor) || nodeMajor < 25) {
+        return null;
+    }
+
+    if (config.command !== "npx") {
+        return null;
+    }
+
+    const args = config.args || [];
+    if (args.includes("@modelcontextprotocol/server-memory")) {
+        return `Skipping MCP server '${serverName}': @modelcontextprotocol/server-memory is currently incompatible with Node ${process.versions.node}.`;
+    }
+
+    if (args.includes("@modelcontextprotocol/server-sequential-thinking")) {
+        return `Skipping MCP server '${serverName}': @modelcontextprotocol/server-sequential-thinking is currently incompatible with Node ${process.versions.node}.`;
+    }
+
+    return null;
+}
+
 export class McpClientManager {
     private servers: Map<string, ConnectedServer> = new Map();
 
@@ -594,6 +616,11 @@ export class McpClientManager {
         const promises: Promise<void>[] = [];
         for (const [name, config] of Object.entries(settings.mcpServers)) {
             if (config.disabled) continue;
+            const skipReason = getKnownCompatibilitySkipReason(name, config);
+            if (skipReason) {
+                console.warn(skipReason);
+                continue;
+            }
             promises.push(this.connectServer(name, config, cwd));
         }
         await Promise.allSettled(promises);
