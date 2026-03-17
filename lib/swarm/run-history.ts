@@ -75,14 +75,16 @@ export const fileRunHistoryStore: RunHistoryStore = {
 
   async list(limit = 50) {
     await ensureDir();
-    const files = (await readdir(HISTORY_DIR)).filter((f) => f.endsWith(".json")).slice(-limit);
+    const files = (await readdir(HISTORY_DIR)).filter((f) => f.endsWith(".json"));
     const entries: RunHistoryEntry[] = [];
     for (const file of files) {
       try {
         entries.push(RunHistoryEntrySchema.parse(JSON.parse(await readFile(path.join(HISTORY_DIR, file), "utf8"))));
       } catch { /* skip */ }
     }
-    return entries.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    // Sort all entries by start time, then take the most recent `limit` entries.
+    const sorted = entries.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    return sorted.slice(-limit);
   },
 
   async getAnalytics() {
