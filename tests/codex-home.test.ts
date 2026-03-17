@@ -53,11 +53,18 @@ test("ensureSwarmCodexHome writes a minimal config and mirrors auth.json", async
 
 test("buildSwarmCodexEnvironment forces stable profile defaults for agent sessions", async () => {
   const codexHome = await loadCodexHomeModule();
-  const env = codexHome.buildSwarmCodexEnvironment("C:\\temp\\.codex-swarm", {});
+  const sandboxRoot = mkdtempSync(path.join(tmpdir(), "codex-orch-codex-home-"));
+  const codexHomeDir = path.join(sandboxRoot, ".codex-swarm");
 
-  assert.equal(env.CODEX_HOME, "C:\\temp\\.codex-swarm");
-  assert.equal(env.PROFILE_MODE, "Stable");
-  assert.equal(env.PPP_FORCE_MODE, "Stable");
-  assert.equal(env.PPP_ENABLE_PREDICTORS, "0");
-  assert.equal(env.PPP_SHOW_STARTUP_BANNER, "0");
+  try {
+    const env = codexHome.buildSwarmCodexEnvironment(codexHomeDir, {});
+
+    assert.equal(env.CODEX_HOME, codexHomeDir);
+    assert.equal(env.PROFILE_MODE, "Stable");
+    assert.equal(env.PPP_FORCE_MODE, "Stable");
+    assert.equal(env.PPP_ENABLE_PREDICTORS, "0");
+    assert.equal(env.PPP_SHOW_STARTUP_BANNER, "0");
+  } finally {
+    rmSync(sandboxRoot, { force: true, recursive: true });
+  }
 });
