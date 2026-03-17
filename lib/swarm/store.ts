@@ -121,7 +121,6 @@ class SwarmStore {
     }
 
     this.state.pendingControls = nextPendingControls;
-    this.persistSnapshot();
     if (emit && this.state.running && this.state.runId) {
       this.emitTransientStateUpdate("run.control_queue");
     }
