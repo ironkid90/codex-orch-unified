@@ -4,6 +4,10 @@
       "path": "."
     },
     {
+      "path": "./.memory",
+      "name": "📚 HAM Memory (Hierarchical Associative Memory)"
+    },
+    {
       "path": "../MetaGPT"
     },
     {
