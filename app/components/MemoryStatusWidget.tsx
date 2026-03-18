@@ -72,7 +72,7 @@ export function MemoryStatusWidget() {
 
   if (!status) {
     return (
-      <div className="border rounded-lg p-4 bg-gray-50">
+      <div className="border rounded-lg p-4 bg-gray-50" data-testid="memory-status-widget">
         <p className="text-sm text-gray-500">Loading memory status...</p>
       </div>
     );
@@ -84,9 +84,9 @@ export function MemoryStatusWidget() {
   const isCritical = tokenPercentUsed > 90;
 
   return (
-    <div className="border rounded-lg p-4 bg-gradient-to-br from-blue-50 to-indigo-50 space-y-4">
+    <div className="border rounded-lg p-4 bg-gradient-to-br from-blue-50 to-indigo-50 space-y-4" data-testid="memory-status-widget">
       <div className="flex justify-between items-center">
-        <h3 className="text-lg font-semibold">🧠 Global HAM Memory Status</h3>
+        <h3 className="text-lg font-semibold" data-testid="memory-status-heading">🧠 Global HAM Memory Status</h3>
         <button
           onClick={fetchStatus}
           disabled={loading}

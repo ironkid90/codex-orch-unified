@@ -559,25 +559,25 @@ function beginRuntimeHeartbeat(agentId: AgentId, activeStep: string): () => void
   };
 }
 
-function getGeminiConfig(): GeminiResearchConfig {
+function getGeminiConfig(modelOverride?: string, _workspace?: string): GeminiResearchConfig {
   const providerEnabled = (process.env.SWARM_RESEARCH_PROVIDER || "").toLowerCase() === "gemini";
-  const model = process.env.GEMINI_MODEL || "gemini-3-pro";
+  const model = modelOverride || process.env.GEMINI_MODEL || "gemini-3-pro";
   const apiKey = process.env.GEMINI_API_KEY || undefined;
   const oauthToken = process.env.GOOGLE_OAUTH_ACCESS_TOKEN || undefined;
   const useAdc = process.env.GOOGLE_USE_ADC === "1";
   const baseUrl = process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta";
   return {
-    providerEnabled: resolved.providerEnabled,
-    model: resolved.model,
-    apiKey: resolved.apiKey,
-    oauthToken: resolved.oauthToken,
-    useAdc: resolved.useAdc,
-    baseUrl: resolved.baseUrl,
-    useVertexAi: resolved.useVertexAi,
-    vertexProject: resolved.vertexProject,
-    vertexLocation: resolved.vertexLocation,
-    vertexBaseUrl: resolved.vertexBaseUrl,
-    vertexModel: resolved.vertexModel,
+    providerEnabled,
+    model,
+    apiKey,
+    oauthToken,
+    useAdc,
+    baseUrl,
+    useVertexAi: process.env.GEMINI_USE_VERTEX_AI === "1",
+    vertexProject: process.env.GOOGLE_CLOUD_PROJECT || undefined,
+    vertexLocation: process.env.GOOGLE_CLOUD_LOCATION || undefined,
+    vertexBaseUrl: process.env.GEMINI_VERTEX_BASE_URL || undefined,
+    vertexModel: process.env.GEMINI_VERTEX_MODEL || model,
   };
 }
 

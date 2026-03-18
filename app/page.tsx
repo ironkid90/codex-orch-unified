@@ -508,9 +508,9 @@ export default function HomePage() {
         </section>
 
         {/* Control Center */}
-        <section className="glass-card control-center-panel">
+        <section className="glass-card control-center-panel" data-testid="control-center-panel">
           <div className="glass-card-head">
-            <h2>Control Center</h2>
+            <h2 data-testid="control-center-heading">Control Center</h2>
             <span className={`badge ${hasBlockingSetup ? "err" : warningIssues.length ? "warn" : "ok"}`}>
               {hasBlockingSetup ? "setup required" : warningIssues.length ? "harden warnings" : "healthy"}
             </span>
