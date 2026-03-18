@@ -507,7 +507,6 @@ export default function HomePage() {
           </div>
         </section>
 
-<<<<<<< HEAD
         {/* Control Center */}
         <section className="glass-card control-center-panel">
           <div className="glass-card-head">
@@ -606,8 +605,6 @@ export default function HomePage() {
         </section>
 
         {/* Agent Pipeline */}
-=======
->>>>>>> 2ffc165890d0defb0ad734b94dde0fb18d09c428
         <section className="glass-card">
           <div className="glass-card-head">
             <h2>Agent Pipeline</h2>
