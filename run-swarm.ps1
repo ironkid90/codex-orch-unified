@@ -17,6 +17,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Root = $PSScriptRoot
+Set-Location $Root
 if ($Setup) {
     npm run swarm:setup
     exit $LASTEXITCODE
