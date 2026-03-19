@@ -24,6 +24,9 @@ import { loadPersistedRuntimeState, persistRuntimeState, snapshotQueuedControlRe
 
 const MAX_EVENTS = 500;
 
+/** Duration (ms) after which a persisted "running" state is considered stale and auto-recovered. Default: 1 hour. */
+const STALE_THRESHOLD_MS = Number(process.env.SWARM_STALE_THRESHOLD_MS) || 3_600_000;
+
 type EventInput = Omit<SwarmEvent, "id" | "runId" | "ts">;
 
 function createInitialState(): SwarmRunState {
@@ -141,8 +144,28 @@ class SwarmStore {
     features?: Partial<SwarmFeatures>;
   }): string {
     this.hydrateFromDisk();
+
     if (this.state.running) {
-      throw new Error("A swarm run is already in progress.");
+      // Edge case: running flag set but no runId — corrupt state, force-reset.
+      if (!this.state.runId) {
+        console.warn("[SwarmStore] Detected running=true with null runId. Force-resetting corrupt state.");
+        this.forceReset("Corrupt state: running=true with null runId");
+      } else if (this.state.startedAt) {
+        const elapsed = Date.now() - new Date(this.state.startedAt).getTime();
+        if (elapsed > STALE_THRESHOLD_MS) {
+          console.warn(
+            `[SwarmStore] Detected stale run ${this.state.runId?.slice(0, 8)} ` +
+            `(started ${Math.round(elapsed / 60_000)}m ago, threshold=${STALE_THRESHOLD_MS}ms). Auto-recovering.`
+          );
+          this.forceReset(`Stale run auto-recovered after ${Math.round(elapsed / 60_000)}m`);
+        } else {
+          throw new Error("A swarm run is already in progress.");
+        }
+      } else {
+        // running=true, runId set, but no startedAt — treat as corrupt
+        console.warn("[SwarmStore] Detected running=true with no startedAt timestamp. Force-resetting.");
+        this.forceReset("Corrupt state: running=true with no startedAt");
+      }
     }
 
     const features: SwarmFeatures = { ...DEFAULT_FEATURES, ...opts.features };
@@ -223,6 +246,34 @@ class SwarmStore {
       message,
       level: "error",
     });
+  }
+
+  /**
+   * Unconditionally resets the store to initial state without requiring a valid runId.
+   * Use this when persisted state is corrupt or stale and normal failRun() would throw.
+   */
+  forceReset(reason?: string): void {
+    const previousRunId = this.state.runId;
+    const previousStartedAt = this.state.startedAt;
+    this.state = createInitialState();
+    this.persistSnapshot();
+
+    // Emit a recovery event. Since we just reset, we need a synthetic runId for the event.
+    const syntheticRunId = previousRunId || "force-reset";
+    const event: SwarmEvent = {
+      id: ++this.eventCounter,
+      runId: syntheticRunId,
+      ts: new Date().toISOString(),
+      type: "run.stale_recovery",
+      round: 0,
+      message: reason || "State force-reset.",
+      level: "warn",
+      metadata: { previousRunId, previousStartedAt },
+    };
+    this.state.events.push(event);
+    this.persistSnapshot();
+    this.emitter.emit("event", event);
+    console.info(`[SwarmStore] forceReset complete. Reason: ${reason || "none"}`);
   }
 
   setPaused(paused: boolean, reason?: string): void {

@@ -14,7 +14,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import OpenAI from "openai";
-import { resolveGeminiAuth, resolveOpenAIAuth, resolveOpenAIBaseUrl } from "../providers/auth";
+import { resolveOpenAIAuth, resolveOpenAIBaseUrl } from "../providers/auth";
 import { IOCoordinator } from "./io-coordinator";
 import { createProvider } from "../providers/factory";
 import type {
@@ -118,6 +118,12 @@ const CHECKPOINT_TARGETS = [
 ];
 
 let activeRunPromise: Promise<void> | null = null;
+
+/**
+ * Promise-based mutex that prevents concurrent startSwarmRun() calls.
+ * Only one caller can be inside the critical section (state check through startRun) at a time.
+ */
+let startRunLock: Promise<void> | null = null;
 
 async function configureRunToolRegistry(workspace: string): Promise<void> {
   defaultToolRegistry = createDefaultToolRegistry();
@@ -559,25 +565,25 @@ function beginRuntimeHeartbeat(agentId: AgentId, activeStep: string): () => void
   };
 }
 
-function getGeminiConfig(): GeminiResearchConfig {
+function getGeminiConfig(modelOverride?: string, _workspace?: string): GeminiResearchConfig {
   const providerEnabled = (process.env.SWARM_RESEARCH_PROVIDER || "").toLowerCase() === "gemini";
-  const model = process.env.GEMINI_MODEL || "gemini-3-pro";
+  const model = modelOverride || process.env.GEMINI_MODEL || "gemini-3-pro";
   const apiKey = process.env.GEMINI_API_KEY || undefined;
   const oauthToken = process.env.GOOGLE_OAUTH_ACCESS_TOKEN || undefined;
   const useAdc = process.env.GOOGLE_USE_ADC === "1";
   const baseUrl = process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta";
   return {
-    providerEnabled: resolved.providerEnabled,
-    model: resolved.model,
-    apiKey: resolved.apiKey,
-    oauthToken: resolved.oauthToken,
-    useAdc: resolved.useAdc,
-    baseUrl: resolved.baseUrl,
-    useVertexAi: resolved.useVertexAi,
-    vertexProject: resolved.vertexProject,
-    vertexLocation: resolved.vertexLocation,
-    vertexBaseUrl: resolved.vertexBaseUrl,
-    vertexModel: resolved.vertexModel,
+    providerEnabled,
+    model,
+    apiKey,
+    oauthToken,
+    useAdc,
+    baseUrl,
+    useVertexAi: process.env.GEMINI_USE_VERTEX_AI === "1",
+    vertexProject: process.env.GOOGLE_CLOUD_PROJECT || undefined,
+    vertexLocation: process.env.GOOGLE_CLOUD_LOCATION || undefined,
+    vertexBaseUrl: process.env.GEMINI_VERTEX_BASE_URL || undefined,
+    vertexModel: process.env.GEMINI_VERTEX_MODEL || model,
   };
 }
 
@@ -2864,7 +2870,7 @@ ${maybeCompress(evaluator.text, features.contextCompression)}
         message: `Auto-rewind to checkpoint round ${targetRound}.`,
         metadata: { targetRound, restoredCount: restored },
       });
-      if (features.humanInLoop) {
+      if (features.humanInLoop || features.checkpointing) {
         swarmStore.setPaused(true, `Auto-paused after rewind to round ${targetRound}.`);
         await waitIfPaused(round, "post_rewind_review");
       }
@@ -2885,7 +2891,7 @@ export function getActiveRunPromise(): Promise<void> | null {
 
 export function pauseSwarmRun(reason?: string): boolean {
   const state = swarmStore.getState();
-  if (!state.running || state.paused || !state.features.humanInLoop) {
+  if (!state.running || state.paused) {
     return false;
   }
   swarmStore.setPaused(true, reason || "Paused by operator.");
@@ -2930,14 +2936,6 @@ export async function requestSwarmControl(input: {
   const localRunActive = Boolean(activeRunPromise);
 
   if (input.action === "pause") {
-    if (state.running && !state.features.humanInLoop) {
-      return {
-        ok: false,
-        queued: false,
-        message: "Pause/resume controls are disabled because human-in-the-loop is off.",
-        state,
-      };
-    }
     if (localRunActive && canApplyControlImmediately(state)) {
       const ok = pauseSwarmRun(input.reason);
       return {
@@ -3069,38 +3067,52 @@ export async function requestSwarmControl(input: {
 }
 
 export function startSwarmRun(options: StartOptions = {}): StartResult {
-  const persisted = swarmStore.getState();
-  if (persisted.running && !activeRunPromise) {
-    swarmStore.failRun(
-      new Error(
-        "Recovered stale persisted run state before starting a new run (no active local runner).",
-      ),
-    );
+  // Concurrency guard: reject if another start is already in the critical section.
+  if (startRunLock) {
+    throw new Error("Another startSwarmRun() call is already in progress. Wait for it to complete.");
   }
 
-  const maxRounds = clampRounds(options.maxRounds);
-  const workspace = path.resolve(options.workspace || PROJECT_ROOT);
-  const mode = resolveRunMode(options.mode);
-  clearQueuedControlRequests();
-  swarmStore.refreshPendingControls(false);
-  tokenTracker.reset();
-  const runId = swarmStore.startRun({
-    workspace,
-    maxRounds,
-    mode,
-    features: options.features,
+  let releaseLock: () => void;
+  startRunLock = new Promise<void>((resolve) => {
+    releaseLock = resolve;
   });
-  IOCoordinator.reset();
-  const features = swarmStore.getState().features;
 
-  activeRunPromise = runSwarm({ maxRounds, workspace, mode })
-    .catch((error) => swarmStore.failRun(error))
-    .finally(async () => {
-      await teardownRunToolRegistry().catch((error) => {
-        console.error("Failed to tear down MCP tool registry:", error);
-      });
-      activeRunPromise = null;
+  try {
+    const persisted = swarmStore.getState();
+    if (persisted.running && !activeRunPromise) {
+      // Use forceReset instead of failRun — failRun throws when runId is null.
+      swarmStore.forceReset(
+        "Recovered stale persisted run state before starting a new run (no active local runner).",
+      );
+    }
+
+    const maxRounds = clampRounds(options.maxRounds);
+    const workspace = path.resolve(options.workspace || PROJECT_ROOT);
+    const mode = resolveRunMode(options.mode);
+    clearQueuedControlRequests();
+    swarmStore.refreshPendingControls(false);
+    tokenTracker.reset();
+    const runId = swarmStore.startRun({
+      workspace,
+      maxRounds,
+      mode,
+      features: options.features,
     });
+    IOCoordinator.reset();
+    const features = swarmStore.getState().features;
 
-  return { runId, mode, features };
+    activeRunPromise = runSwarm({ maxRounds, workspace, mode })
+      .catch((error) => swarmStore.failRun(error))
+      .finally(async () => {
+        await teardownRunToolRegistry().catch((error) => {
+          console.error("Failed to tear down MCP tool registry:", error);
+        });
+        activeRunPromise = null;
+      });
+
+    return { runId, mode, features };
+  } finally {
+    releaseLock!();
+    startRunLock = null;
+  }
 }

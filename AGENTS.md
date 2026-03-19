@@ -16,3 +16,53 @@ This file provides guidance to agents when working with code in this repository.
 - Relevant imported assistant rules for `roocode-ref/` edits:
   - `SettingsView` inputs must bind to local `cachedState`, not directly to `useExtensionState()`.
   - JSON persistence should use `safeWriteJson` from `roocode-ref/src/utils/safeWriteJson.ts`.
+
+## Qdrant Vector Search (ALL agents MUST use this)
+
+A local Qdrant vector database is always running on `http://localhost:6333`. The `workspace` collection holds embeddings for all source files in this repository.
+
+### When to use Qdrant
+
+- Before editing a file: search for existing patterns, helpers, or similar implementations.
+- When adding a new feature: find the closest existing code to guide naming/structure.
+- For any question about "how is X done in this codebase".
+
+### Available tools
+
+| Runtime | Tool / Module |
+| ------- | ------------- |
+| TypeScript / swarm | `lib/tools/qdrant-search.ts` — `qdrantSearchTool` (auto-registered in `lib/tools/index.ts`) |
+| Python (sidecar) | `foundry_agents/qdrant_tool.py` — `search()`, `scroll()`, `list_collections()` |
+| CLI | `python scripts/qdrant_ingest.py --help` (re-index workspace) |
+
+### Quick API reference
+
+```ts
+// List collections
+await qdrantSearchTool.execute({ mode: "list" })
+
+// Find files by payload field (no embedding needed)
+await qdrantSearchTool.execute({ mode: "scroll", filterKey: "language", filterValue: "typescript", limit: 20 })
+
+// Vector similarity search (provide your own embedding)
+await qdrantSearchTool.execute({ mode: "search", queryVector: [...], limit: 10 })
+```
+
+```python
+from foundry_agents.qdrant_tool import search, scroll, list_collections
+
+# Scroll by file path
+scroll(filter_key="file_path", filter_value="lib/swarm/engine.ts")
+
+# Semantic search (requires embedding vector)
+search(query_vector=[...], limit=10)
+```
+
+### Re-indexing the workspace
+
+```bash
+pip install qdrant-client sentence-transformers tqdm
+python scripts/qdrant_ingest.py --dir . --recreate
+```
+
+Environment variables: `QDRANT_HOST` (default: localhost), `QDRANT_PORT` (default: 6333), `QDRANT_COLLECTION` (default: workspace).

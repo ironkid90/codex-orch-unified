@@ -71,3 +71,9 @@ firebase-debug.log
 tmp/
 engine.diff
 compile_errors.txt
+
+# Database files (avoid literal env-var filenames committed by accident)
+*.db
+*.sqlite
+*.sqlite3
+${SQLITE_DB_PATH}

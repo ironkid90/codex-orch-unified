@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { inspectControlCenter } from "@/lib/swarm/control-center";
-import { getActiveRunPromise, startSwarmRun } from "@/lib/swarm/engine";
+import { getRuntime } from "@/lib/swarm/runtime";
 import { swarmStore } from "@/lib/swarm/store";
 import type { RunMode, SwarmFeatures } from "@/lib/swarm/types";
 
@@ -15,8 +15,9 @@ interface StartPayload {
 }
 
 export async function POST(request: Request) {
+  const runtime = await getRuntime();
   const currentState = swarmStore.getState();
-  if (currentState.running || getActiveRunPromise()) {
+  if (currentState.running || runtime.getActiveRunPromise()) {
     return NextResponse.json(
       {
         error: "A swarm run is already active.",
@@ -55,7 +56,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = startSwarmRun({
+    const result = await runtime.startRun({
       maxRounds: payload.maxRounds,
       workspace: payload.workspace,
       mode: payload.mode,

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { MemoryStatusWidget } from "@/app/components/MemoryStatusWidget";
 
 import type { PendingControlRequest, RunMode, SwarmFeatures, SwarmRunState } from "@/lib/swarm/types";
+import { DEFAULT_FEATURES } from "@/lib/swarm/types";
 
 interface StateResponse {
   state: SwarmRunState;
@@ -49,17 +50,6 @@ interface StartResponse {
   requiresSetup?: boolean;
   controlCenter?: ControlCenterSnapshot;
 }
-
-const DEFAULT_FEATURES: SwarmFeatures = {
-  lintLoop: true,
-  ensembleVoting: true,
-  researchAgent: true,
-  contextCompression: true,
-  heuristicSelector: true,
-  checkpointing: true,
-  humanInLoop: true,
-  approveNextActionGate: false,
-};
 
 function statusBadge(status: string): { text: string; cls: string } {
   if (status === "PASS") return { text: "Pass", cls: "ok" };
@@ -304,7 +294,7 @@ export default function HomePage() {
         : "○ Idle";
 
   const canPause = supportsPauseResume && isRunning && !state?.paused && !pendingPause;
-  const canResume = supportsPauseResume && isRunning && Boolean(state?.paused);
+  const canResume = supportsPauseResume && isRunning && Boolean(state?.paused) && Boolean(activeGate);
   const canRewind = supportsRewind && Boolean(state?.paused) && Boolean(latestCheckpointRound) && pendingControls.length === 0;
   const heartbeatState = heartbeatAt ? formatAgeFromNow(heartbeatAt) : "no heartbeat yet";
 
@@ -382,7 +372,12 @@ export default function HomePage() {
             )}
             {canResume && (
               <button className="btn btn-secondary" onClick={() => void controlRun("resume")} disabled={busy}>
-                ▶ Resume
+                ▶ Resume {activeGate ? `(at: ${activeGate})` : ""}
+              </button>
+            )}
+            {supportsPauseResume && isRunning && Boolean(state?.paused) && !activeGate && (
+              <button className="btn btn-secondary" disabled>
+                ⌛ Waiting to reach pause point…
               </button>
             )}
             {canRewind && (
@@ -456,7 +451,7 @@ export default function HomePage() {
           <div className="round-list">
             <div className="round-row">
               <div className="round-detail">
-                Active gate: {activeGate || "—"}
+                Active gate: {state?.paused && activeGate ? `⏸ Waiting at: ${activeGate}` : activeGate || "—"}
                 <br />
                 Active step: {activeStep || "—"}
                 {state?.activity.activeAgentId ? ` · ${state.activity.activeAgentId}` : ""}
@@ -507,11 +502,10 @@ export default function HomePage() {
           </div>
         </section>
 
-<<<<<<< HEAD
         {/* Control Center */}
-        <section className="glass-card control-center-panel">
+        <section className="glass-card control-center-panel" data-testid="control-center-panel">
           <div className="glass-card-head">
-            <h2>Control Center</h2>
+            <h2 data-testid="control-center-heading">Control Center</h2>
             <span className={`badge ${hasBlockingSetup ? "err" : warningIssues.length ? "warn" : "ok"}`}>
               {hasBlockingSetup ? "setup required" : warningIssues.length ? "harden warnings" : "healthy"}
             </span>
@@ -606,8 +600,6 @@ export default function HomePage() {
         </section>
 
         {/* Agent Pipeline */}
-=======
->>>>>>> 2ffc165890d0defb0ad734b94dde0fb18d09c428
         <section className="glass-card">
           <div className="glass-card-head">
             <h2>Agent Pipeline</h2>

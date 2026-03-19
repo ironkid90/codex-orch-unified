@@ -1,5 +1,5 @@
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { type Span, trace } from "@opentelemetry/api";
+import { type Attributes, type Span, trace } from "@opentelemetry/api";
 
 let swarmTracerProvider: BasicTracerProvider | null = null;
 let swarmTracingEnabled = false;
@@ -33,7 +33,7 @@ export function isSwarmTracingEnabled(): boolean {
 }
 
 export interface RunInSpanOptions {
-  attributes?: Record<string, unknown>;
+  attributes?: Attributes;
 }
 
 export async function runInSpan<T>(
@@ -48,13 +48,16 @@ export async function runInSpan<T>(
 
   const tracer = trace.getTracer("swarm");
 
-  return tracer.startActiveSpan(name, { attributes: options.attributes }, async (span) => {
-    try {
-      const result = await fn(span);
-      return result;
-    } finally {
-      span.end();
-    }
+  return await new Promise<T>((resolve, reject) => {
+    tracer.startActiveSpan(name, { attributes: options.attributes }, async (span) => {
+      try {
+        resolve(await fn(span));
+      } catch (error) {
+        reject(error);
+      } finally {
+        span.end();
+      }
+    });
   });
 }
 

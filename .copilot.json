@@ -41,6 +41,13 @@
     "autoMergeReviewed": true,
     "conflictResolution": "last-write-wins"
   },
+  "qdrant": {
+    "enabled": true,
+    "host": "localhost",
+    "port": 6333,
+    "collection": "workspace",
+    "description": "Use Qdrant vector search (lib/tools/qdrant-search.ts) BEFORE editing any file to find existing patterns, helpers, and similar implementations. Re-index with: python scripts/qdrant_ingest.py --dir . --recreate"
+  },
   "excludePaths": [
     "node_modules",
     ".next",
