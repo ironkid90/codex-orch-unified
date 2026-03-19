@@ -4,14 +4,7 @@ import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 
-import {
-  getActiveRunPromise,
-  pauseSwarmRun,
-  requestSwarmControl,
-  resumeSwarmRun,
-  rewindSwarmToRound,
-  startSwarmRun,
-} from "../lib/swarm/engine";
+import { getRuntime } from "../lib/swarm/runtime";
 import { swarmStore } from "../lib/swarm/store";
 import type { RunMode, SwarmFeatures } from "../lib/swarm/types";
 
@@ -582,7 +575,8 @@ async function controlCommand(
     action === "rewind"
       ? Number(flagString(flags, "round", positionals[0] || ""))
       : undefined;
-  const result = await requestSwarmControl({
+  const runtime = await getRuntime();
+  const result = await runtime.requestControl({
     action,
     reason: action === "pause" ? flagString(flags, "reason", "Paused from CLI.") : undefined,
     round: requestedRound,
@@ -609,13 +603,14 @@ async function runCommandInteractive(flags: Map<string, string | boolean>): Prom
   const nonInteractive = flagBoolean(flags, "non-interactive", false);
   const features = makeFeatures(flags);
 
-  const started = startSwarmRun({
+  const runtime = await getRuntime();
+  const started = await runtime.startRun({
     mode,
     maxRounds,
     workspace,
     features,
   });
-  console.log(`Started run ${started.runId} in ${started.mode} mode.`);
+  console.log(`Started run ${started.runId} in ${started.mode} mode (runtime: ${runtime.name}).`);
   console.log("Features:", started.features);
 
   const unsubscribe = swarmStore.subscribe((event) => {
@@ -640,12 +635,12 @@ async function runCommandInteractive(flags: Map<string, string | boolean>): Prom
           return;
         }
         if (trimmed === "pause") {
-          const ok = pauseSwarmRun("Paused from CLI.");
+          const ok = await runtime.pauseRun("Paused from CLI.");
           console.log(ok ? "Run paused." : "Pause not applied.");
           return;
         }
         if (trimmed === "resume") {
-          const ok = resumeSwarmRun();
+          const ok = await runtime.resumeRun();
           console.log(ok ? "Run resumed." : "Resume not applied.");
           return;
         }
@@ -656,7 +651,7 @@ async function runCommandInteractive(flags: Map<string, string | boolean>): Prom
             return;
           }
           try {
-            const result = await rewindSwarmToRound(Math.max(1, Math.floor(round)));
+            const result = await runtime.rewindToRound(Math.max(1, Math.floor(round)));
             console.log(`Rewound to round ${result.round}; restored ${result.restoredCount} paths.`);
           } catch (error) {
             console.log(error instanceof Error ? error.message : String(error));
@@ -678,7 +673,7 @@ async function runCommandInteractive(flags: Map<string, string | boolean>): Prom
     });
   }
 
-  await getActiveRunPromise();
+  await runtime.getActiveRunPromise();
   unsubscribe();
   rl?.close();
   printStateSummary();

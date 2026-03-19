@@ -10,7 +10,7 @@ export async function GET() {
     state,
     capabilities: {
       supportsLocalExecution: !process.env.VERCEL,
-      supportsPauseResume: state.features.humanInLoop,
+      supportsPauseResume: state.running,
       supportsRewind: state.features.checkpointing,
     },
   });

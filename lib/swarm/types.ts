@@ -42,11 +42,60 @@ export interface RoundSummary {
   notes: string[];
 }
 
+/**
+ * Known event types emitted by the swarm runtime.
+ * Using a branded string keeps the union extensible while catching most typos.
+ */
+export type SwarmEventType =
+  // Run lifecycle
+  | "run.started"
+  | "run.finished"
+  | "run.failed"
+  | "run.paused"
+  | "run.resumed"
+  | "run.stale_recovery"
+  | "run.rewind"
+  | "run.pause_gate"
+  | "run.approval_gate"
+  | "run.control"
+  | "run.control_queue"
+  | "run.activity"
+  // Round lifecycle
+  | "round.started"
+  | "round.finished"
+  // Agent lifecycle
+  | "agent.started"
+  | "agent.finished"
+  | "agent.failed"
+  | "agent.log"
+  | "agent.stalled"
+  | "agent.pda"
+  | "agent.safety"
+  | "agent.tool_call"
+  | "agent.tool_result"
+  // Checkpoint
+  | "checkpoint.created"
+  // Context
+  | "context.batch_artifacts"
+  | "context.mcp_tools"
+  | "context.model_routing"
+  // Lint
+  | "lint.finished"
+  // Research
+  | "research.provider"
+  | "research.web"
+  // Workspace
+  | "workspace.diff"
+  // IO Coordinator
+  | "io.updated"
+  // Allow future extension without breaking existing code
+  | (string & {});
+
 export interface SwarmEvent {
   id: number;
   runId: string;
   ts: string;
-  type: string;
+  type: SwarmEventType;
   round: number;
   message: string;
   level?: "info" | "warn" | "error";

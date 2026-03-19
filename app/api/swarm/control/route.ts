@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 
-import { requestSwarmControl } from "@/lib/swarm/engine";
+import { getRuntime } from "@/lib/swarm/runtime";
+import type { ControlAction } from "@/lib/swarm/runtime";
 
 export const dynamic = "force-dynamic";
 
 interface ControlPayload {
-  action?: "pause" | "resume" | "rewind";
+  action?: ControlAction;
   reason?: string;
   round?: number;
 }
@@ -24,7 +25,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await requestSwarmControl({
+    const runtime = await getRuntime();
+    const result = await runtime.requestControl({
       action,
       reason: payload.reason,
       round: payload.round,

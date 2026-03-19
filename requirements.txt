@@ -9,5 +9,6 @@ azure-identity
 python-dotenv
 debugpy
 agent-dev-cli
-eslint
+# Google ADK (optional — needed for adk_prototype/)
+# google-adk
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { MemoryStatusWidget } from "@/app/components/MemoryStatusWidget";
 
 import type { PendingControlRequest, RunMode, SwarmFeatures, SwarmRunState } from "@/lib/swarm/types";
+import { DEFAULT_FEATURES } from "@/lib/swarm/types";
 
 interface StateResponse {
   state: SwarmRunState;
@@ -49,17 +50,6 @@ interface StartResponse {
   requiresSetup?: boolean;
   controlCenter?: ControlCenterSnapshot;
 }
-
-const DEFAULT_FEATURES: SwarmFeatures = {
-  lintLoop: true,
-  ensembleVoting: true,
-  researchAgent: true,
-  contextCompression: true,
-  heuristicSelector: true,
-  checkpointing: true,
-  humanInLoop: true,
-  approveNextActionGate: false,
-};
 
 function statusBadge(status: string): { text: string; cls: string } {
   if (status === "PASS") return { text: "Pass", cls: "ok" };
@@ -304,7 +294,7 @@ export default function HomePage() {
         : "○ Idle";
 
   const canPause = supportsPauseResume && isRunning && !state?.paused && !pendingPause;
-  const canResume = supportsPauseResume && isRunning && Boolean(state?.paused);
+  const canResume = supportsPauseResume && isRunning && Boolean(state?.paused) && Boolean(activeGate);
   const canRewind = supportsRewind && Boolean(state?.paused) && Boolean(latestCheckpointRound) && pendingControls.length === 0;
   const heartbeatState = heartbeatAt ? formatAgeFromNow(heartbeatAt) : "no heartbeat yet";
 
@@ -382,7 +372,12 @@ export default function HomePage() {
             )}
             {canResume && (
               <button className="btn btn-secondary" onClick={() => void controlRun("resume")} disabled={busy}>
-                ▶ Resume
+                ▶ Resume {activeGate ? `(at: ${activeGate})` : ""}
+              </button>
+            )}
+            {supportsPauseResume && isRunning && Boolean(state?.paused) && !activeGate && (
+              <button className="btn btn-secondary" disabled>
+                ⌛ Waiting to reach pause point…
               </button>
             )}
             {canRewind && (
@@ -456,7 +451,7 @@ export default function HomePage() {
           <div className="round-list">
             <div className="round-row">
               <div className="round-detail">
-                Active gate: {activeGate || "—"}
+                Active gate: {state?.paused && activeGate ? `⏸ Waiting at: ${activeGate}` : activeGate || "—"}
                 <br />
                 Active step: {activeStep || "—"}
                 {state?.activity.activeAgentId ? ` · ${state.activity.activeAgentId}` : ""}
