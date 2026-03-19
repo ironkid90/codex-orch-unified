@@ -54,8 +54,8 @@ Navigate to detailed context for each major subsystem:
 ## 🚨 CRITICAL ISSUES (Resolve Before Next Commit)
 
 ### Committed Secrets: .kilocode/ Directory  
-- Contains live GitHub PAT in config
-- **Action**: Rotate token immediately, gitignore `.kilocode/`, remove from HEAD via Git history cleanup
+- Contains sensitive authentication data in config
+- **Action**: Treat credentials as compromised; rotate any affected tokens/keys, gitignore `.kilocode/`, and remove from HEAD via Git history cleanup
 
 ---
 
