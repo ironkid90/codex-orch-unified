@@ -22,7 +22,7 @@ See [MEMORY-PROTOCOL.md § Standard summary schema](./MEMORY-PROTOCOL.md#standar
 
 **Touched Paths**:
 
-- `MEMORY-PROTOCOL.md` (created in prior task)
+- `MEMORY-PROTOCOL.md` (created in this PR)
 - `CLAUDE.md`
 - `.memory/inbox.md`
 - `.memory/baseline-snapshot.md`
