@@ -1,34 +1,31 @@
 {
-  "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "."
-      ],
-      "alwaysAllow": [
-        "search_files",
-        "read_file",
-        "list_directory"
-      ]
-    },
-    "memory": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-memory"
-      ]
-    },
-    "sequentialthinking": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-sequential-thinking"
-      ],
-      "alwaysAllow": [
-        "sequentialthinking"
-      ]
+    "mcpServers": {
+        "filesystem": {
+            "command": "C:\\Users\\Gabi\\AppData\\Local\\nvm\\v22.14.0\\node.exe",
+            "args": [
+                "C:\\Users\\Gabi\\.agent-runtime\\mcp\\node_modules\\@modelcontextprotocol\\server-filesystem\\dist\\index.js",
+                "."
+            ],
+            "alwaysAllow": [
+                "search_files",
+                "read_file",
+                "list_directory"
+            ]
+        },
+        "memory": {
+            "command": "C:\\Users\\Gabi\\AppData\\Local\\nvm\\v22.14.0\\node.exe",
+            "args": [
+                "C:\\Users\\Gabi\\.agent-runtime\\mcp\\node_modules\\@modelcontextprotocol\\server-memory\\dist\\index.js"
+            ]
+        },
+        "sequentialthinking": {
+            "command": "C:\\Users\\Gabi\\AppData\\Local\\nvm\\v22.14.0\\node.exe",
+            "alwaysAllow": [
+                "sequentialthinking"
+            ],
+            "args": [
+                "C:\\Users\\Gabi\\.agent-runtime\\mcp\\node_modules\\@modelcontextprotocol\\server-sequential-thinking\\dist\\index.js"
+            ]
+        }
     }
-  }
 }

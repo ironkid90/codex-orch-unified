@@ -1,4 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -95,7 +96,6 @@ const ENV_TEMPLATE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}/g;
 const SIMPLE_ENV_VALUE = /^[A-Za-z0-9_./:@-]+$/;
 const MCP_PROBE_TIMEOUT_MS = 5_000;
 const QDRANT_PROBE_TIMEOUT_MS = 5_000;
-const MAX_PROBE_OUTPUT_LENGTH = 400;
 
 interface McpProbeSummary {
   status: Record<string, ControlCenterMcpServerStatus>;
@@ -127,13 +127,6 @@ function formatEnvValue(value: string): string {
   if (!value) return '""';
   if (SIMPLE_ENV_VALUE.test(value)) return value;
   return JSON.stringify(value);
-}
-
-function truncateProbeOutput(value: string): string {
-  const trimmed = value.replace(/\s+/g, " ").trim();
-  if (!trimmed) return "";
-  if (trimmed.length <= MAX_PROBE_OUTPUT_LENGTH) return trimmed;
-  return `${trimmed.slice(0, MAX_PROBE_OUTPUT_LENGTH - 3)}...`;
 }
 
 function normalizeEnv(env: NodeJS.ProcessEnv | Record<string, string>): Record<string, string> {
@@ -188,6 +181,24 @@ function isRequiredMcpServer(serverName: string, settings: RawMcpSettings): bool
   return true;
 }
 
+function classifyMcpIssue(
+  serverName: string,
+  issue: string,
+  settings: RawMcpSettings,
+): { warning: string | null; blockingIssue: string | null } {
+  if (isRequiredMcpServer(serverName, settings)) {
+    return {
+      warning: null,
+      blockingIssue: issue,
+    };
+  }
+
+  return {
+    warning: issue,
+    blockingIssue: null,
+  };
+}
+
 function buildProbeEnvValues(workspaceRoot: string, serverEnv?: Record<string, string>): Record<string, string> {
   const base = {
     ...normalizeEnv(process.env),
@@ -201,23 +212,6 @@ function buildProbeEnvValues(workspaceRoot: string, serverEnv?: Record<string, s
     ...base,
     ...expandedServerEnv,
   };
-}
-
-async function terminateProbeProcess(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.killed || child.exitCode !== null) {
-    return;
-  }
-
-  child.kill();
-  await new Promise((resolve) => setTimeout(resolve, 25));
-}
-
-function formatProcessFailure(code: number | null, signal: NodeJS.Signals | null, output: string): string {
-  const suffix = output ? ` ${truncateProbeOutput(output)}` : "";
-  if (signal) {
-    return `Process exited via signal ${signal}.${suffix}`;
-  }
-  return `Process exited with code ${code ?? "unknown"}.${suffix}`;
 }
 
 async function probeStdioServer(config: ServerConfig, workspaceRoot: string): Promise<ControlCenterMcpServerStatus> {
@@ -235,41 +229,115 @@ async function probeStdioServer(config: ServerConfig, workspaceRoot: string): Pr
   }
 
   return await new Promise<ControlCenterMcpServerStatus>((resolve) => {
-    let settled = false;
-    let output = "";
-    const child = spawn(command, args, {
+    const transport = new StdioClientTransport({
+      command,
+      args,
+      env: envValues,
       cwd,
-      env: envValues as NodeJS.ProcessEnv,
-      stdio: "pipe",
     });
+    const requestId = 1;
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
 
     const finish = async (status: ControlCenterMcpServerStatus): Promise<void> => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(timer);
-      await terminateProbeProcess(child).catch(() => undefined);
+      if (timer) {
+        clearTimeout(timer);
+      }
+      transport.onmessage = undefined;
+      transport.onerror = undefined;
+      transport.onclose = undefined;
+      await transport.close().catch(() => undefined);
       resolve(status);
     };
 
-    child.stdout.on("data", (chunk: Buffer | string) => {
-      output += chunk.toString();
-    });
-    child.stderr.on("data", (chunk: Buffer | string) => {
-      output += chunk.toString();
-    });
+    transport.onerror = (error) => {
+      void finish({
+        reachable: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    };
 
-    child.once("error", (error: Error) => {
-      void finish({ reachable: false, error: error.message });
-    });
-    child.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
-      void finish({ reachable: false, error: formatProcessFailure(code, signal, output) });
-    });
+    transport.onclose = () => {
+      void finish({
+        reachable: false,
+        error: "Connection closed before an MCP initialize response was received.",
+      });
+    };
 
-    const timer = setTimeout(() => {
-      void finish({ reachable: true });
+    transport.onmessage = (message) => {
+      if (!message || typeof message !== "object" || !("id" in message) || message.id !== requestId) {
+        return;
+      }
+
+      if ("error" in message && message.error && typeof message.error === "object") {
+        const errorMessage = "message" in message.error && typeof message.error.message === "string"
+          ? message.error.message
+          : "Unknown MCP initialize error.";
+        void finish({
+          reachable: false,
+          error: `MCP initialize failed: ${errorMessage}`,
+        });
+        return;
+      }
+
+      if (!("result" in message) || !message.result || typeof message.result !== "object") {
+        void finish({
+          reachable: false,
+          error: "Received an invalid MCP initialize response.",
+        });
+        return;
+      }
+
+      const protocolVersion = "protocolVersion" in message.result ? message.result.protocolVersion : undefined;
+      if (typeof protocolVersion !== "string" || protocolVersion.length === 0) {
+        void finish({
+          reachable: false,
+          error: "MCP initialize response did not include a protocolVersion.",
+        });
+        return;
+      }
+
+      void transport.send({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+      }).catch(() => undefined).finally(() => {
+        void finish({ reachable: true });
+      });
+    };
+
+    timer = setTimeout(() => {
+      void finish({
+        reachable: false,
+        error: `Timed out after ${MCP_PROBE_TIMEOUT_MS}ms waiting for an MCP initialize response.`,
+      });
     }, MCP_PROBE_TIMEOUT_MS);
+
+    void transport.start()
+      .then(async () => {
+        await transport.send({
+          jsonrpc: "2.0",
+          id: requestId,
+          method: "initialize",
+          params: {
+            protocolVersion: LATEST_PROTOCOL_VERSION,
+            capabilities: {},
+            clientInfo: {
+              name: "codex-orch-control-center",
+              version: "1.0.0",
+            },
+          },
+        });
+      })
+      .catch((error) => {
+        void finish({
+          reachable: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
   });
 }
 
@@ -368,11 +436,11 @@ async function probeMcpServers(
       .map(async ([serverName, config]) => {
         const compatibilityWarning = getKnownCompatibilitySkipReason(serverName, config);
         if (compatibilityWarning) {
+          const classifiedIssue = classifyMcpIssue(serverName, compatibilityWarning, rawSettings);
           return {
             serverName,
             status: { reachable: false, error: compatibilityWarning } satisfies ControlCenterMcpServerStatus,
-            warning: compatibilityWarning,
-            blockingIssue: null,
+            ...classifiedIssue,
           };
         }
 
@@ -382,10 +450,11 @@ async function probeMcpServers(
         }
 
         const issue = `MCP server '${serverName}' is unreachable: ${status.error || "probe failed."}`;
-        if (isRequiredMcpServer(serverName, rawSettings)) {
-          return { serverName, status, warning: null, blockingIssue: issue };
-        }
-        return { serverName, status, warning: issue, blockingIssue: null };
+        return {
+          serverName,
+          status,
+          ...classifyMcpIssue(serverName, issue, rawSettings),
+        };
       }),
   );
 
@@ -599,6 +668,8 @@ export async function inspectControlCenter(workspaceRoot: string, settingsPath?:
   let registryPathExists = false;
   const missingManifests: string[] = [];
   const fallbackMcpServerStatus: Record<string, ControlCenterMcpServerStatus> = {};
+  const fallbackMcpWarnings: string[] = [];
+  const fallbackMcpBlockingIssues: string[] = [];
 
   let parsedSettings: RawMcpSettings = {};
 
@@ -650,11 +721,14 @@ export async function inspectControlCenter(workspaceRoot: string, settingsPath?:
         const manifestPath = path.join(registryPathResolved, "servers", serverName, "server.yaml");
         if (!(await fileExists(manifestPath))) {
           missingManifests.push(serverName);
+          const issue = `Missing Docker registry manifest for '${serverName}' at ${manifestPath}`;
           fallbackMcpServerStatus[serverName] = {
             reachable: false,
-            error: `Missing Docker registry manifest at ${manifestPath}`,
+            error: issue,
           };
-          blockingIssues.push(`Missing Docker registry manifest for '${serverName}' at ${manifestPath}`);
+          const classifiedIssue = classifyMcpIssue(serverName, issue, parsedSettings);
+          if (classifiedIssue.warning) fallbackMcpWarnings.push(classifiedIssue.warning);
+          if (classifiedIssue.blockingIssue) fallbackMcpBlockingIssues.push(classifiedIssue.blockingIssue);
           continue;
         }
 
@@ -686,9 +760,14 @@ export async function inspectControlCenter(workspaceRoot: string, settingsPath?:
             }
           }
         } catch (error) {
-          blockingIssues.push(
-            `Unable to parse Docker registry manifest for '${serverName}': ${error instanceof Error ? error.message : String(error)}`,
-          );
+          const issue = `Unable to parse Docker registry manifest for '${serverName}': ${error instanceof Error ? error.message : String(error)}`;
+          fallbackMcpServerStatus[serverName] = {
+            reachable: false,
+            error: issue,
+          };
+          const classifiedIssue = classifyMcpIssue(serverName, issue, parsedSettings);
+          if (classifiedIssue.warning) fallbackMcpWarnings.push(classifiedIssue.warning);
+          if (classifiedIssue.blockingIssue) fallbackMcpBlockingIssues.push(classifiedIssue.blockingIssue);
         }
       }
     }
@@ -702,6 +781,8 @@ export async function inspectControlCenter(workspaceRoot: string, settingsPath?:
     parsedSettings,
     fallbackMcpServerStatus,
   );
+  warnings.push(...fallbackMcpWarnings);
+  blockingIssues.push(...fallbackMcpBlockingIssues);
   warnings.push(...mcpProbeSummary.warnings);
   blockingIssues.push(...mcpProbeSummary.blockingIssues);
 
