@@ -23,16 +23,16 @@ Additional optional sidecar: Microsoft Agent Framework workflow in `foundry_agen
 - Provider/model routing from `config/model-routing.json`
 - Built-in MCP tool loading from `mcp-settings.json`, including Docker MCP registry manifests
 
-## Runtime Hardening (v1.1)
+## Universal Memory Protocol
 
-The custom runtime now includes the following reliability improvements:
+All agents working in this repository must follow the unified memory workflow defined in [MEMORY-PROTOCOL.md](MEMORY-PROTOCOL.md):
 
-- **Stale state recovery**: Runs stuck longer than `SWARM_STALE_THRESHOLD_MS` (default 1 hour) are automatically detected and force-reset on next start
-- **Concurrency guard**: Promise-based mutex prevents overlapping `startSwarmRun()` calls
-- **Decoupled pause/resume**: Pause and resume work independently of `humanInLoop` feature flag — any running swarm can be paused
-- **UI control state alignment**: Resume button requires active gate acknowledgment; "Waiting to reach pause point" state shown when pause is requested but not yet applied
+- **Before coding:** Read `CLAUDE.md` and relevant scoped context from `.memory/`
+- **After task:** Append a compressed summary to `.memory/inbox.md`
 
-## Current Status
+This single-source-of-truth protocol ensures consistent agent behavior across Copilot, Gemini, Roo, and CLI workflows.
+
+## Current Runtime Status
 
 What is implemented now:
 

@@ -1,6 +1,6 @@
 {
   "name": "GitHub Copilot Configuration - Global HAM",
-  "description": "Copilot integration with hierarchical agent memory for token-efficient context management",
+  "description": "Copilot integration with hierarchical agent memory for token-efficient context management",  "protocol": "./MEMORY-PROTOCOL.md",
   "memory": {
     "enabled": true,
     "type": "hierarchical",
@@ -56,5 +56,6 @@
     ".git",
     "runs",
     "batch"
-  ]
+  ],
+  "_comment": "All memory and execution behavior is governed by MEMORY-PROTOCOL.md. This is the single source of truth."
 }
