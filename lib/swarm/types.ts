@@ -1,4 +1,5 @@
 export type AgentId =
+  | "planner"
   | "research"
   | "worker1"
   | "worker2"
@@ -244,6 +245,7 @@ export interface SwarmRunState {
 }
 
 export const AGENT_IDS: AgentId[] = [
+  "planner",
   "research",
   "worker1",
   "worker2",
@@ -292,6 +294,12 @@ export function createIoCoordinatorDefaults(): IoCoordinatorSnapshot {
 
 export function createAgentDefaults(): Record<AgentId, AgentState> {
   return {
+    planner: {
+      id: "planner",
+      label: "Planner",
+      phase: "idle",
+      round: 0,
+    },
     research: {
       id: "research",
       label: "Research",

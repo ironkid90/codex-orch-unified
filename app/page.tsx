@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { MemoryStatusWidget } from "@/app/components/MemoryStatusWidget";
+import { AntigravityPanel } from "@/app/components/AntigravityPanel";
+import ReactMarkdown from "react-markdown";
+import { Play, Pause, Rewind, FastForward } from "lucide-react";
 
 import type { PendingControlRequest, RunMode, SwarmFeatures, SwarmRunState } from "@/lib/swarm/types";
 import { DEFAULT_FEATURES } from "@/lib/swarm/types";
@@ -109,6 +112,7 @@ export default function HomePage() {
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [secretInputs, setSecretInputs] = useState<Record<string, string>>({});
   const [registryPathInput, setRegistryPathInput] = useState("");
+  const [prompt, setPrompt] = useState("");
 
   const loadControlCenter = useCallback(async () => {
     try {
@@ -172,7 +176,7 @@ export default function HomePage() {
       const res = await fetch("/api/swarm/start", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ maxRounds, mode, features }),
+        body: JSON.stringify({ maxRounds, mode, features, prompt }),
       });
       const payload = (await res.json()) as StartResponse;
       if (!res.ok) {
@@ -356,28 +360,28 @@ export default function HomePage() {
               </select>
             </label>
 
-            <button className="btn btn-primary" onClick={() => void startRun()} disabled={busy || isRunning || hasBlockingSetup}>
-              {isRunning ? "● Running" : hasBlockingSetup ? "⚠ Setup Required" : "▶ Start Swarm"}
+            <button className="btn btn-primary" onClick={() => void startRun()} disabled={busy || isRunning || hasBlockingSetup} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {isRunning ? <><FastForward size={14}/> Running</> : hasBlockingSetup ? "⚠ Setup Required" : <><Play size={14} fill="currentColor" /> Start Swarm</>}
             </button>
 
             {canPause && (
-              <button className="btn btn-secondary" onClick={() => void controlRun("pause")} disabled={busy}>
-                ⏸ Pause
+              <button className="btn btn-secondary" onClick={() => void controlRun("pause")} disabled={busy} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Pause size={14} fill="currentColor" /> Pause
               </button>
             )}
             {!canPause && supportsPauseResume && isRunning && !state?.paused && pendingPause && (
-              <button className="btn btn-secondary" disabled>
-                ⌛ Pause Pending
+              <button className="btn btn-secondary" disabled style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Pause size={14} /> Pause Pending
               </button>
             )}
             {canResume && (
-              <button className="btn btn-secondary" onClick={() => void controlRun("resume")} disabled={busy}>
-                ▶ Resume {activeGate ? `(at: ${activeGate})` : ""}
+              <button className="btn btn-secondary" onClick={() => void controlRun("resume")} disabled={busy} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Play size={14} fill="currentColor" /> Resume {activeGate ? `(${activeGate})` : ""}
               </button>
             )}
             {supportsPauseResume && isRunning && Boolean(state?.paused) && !activeGate && (
-              <button className="btn btn-secondary" disabled>
-                ⌛ Waiting to reach pause point…
+              <button className="btn btn-secondary" disabled style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Pause size={14} /> Waiting...
               </button>
             )}
             {canRewind && (
@@ -385,8 +389,9 @@ export default function HomePage() {
                 className="btn btn-secondary"
                 onClick={() => void controlRun("rewind", latestCheckpointRound)}
                 disabled={busy}
+                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
               >
-                ↻ Rewind r{latestCheckpointRound}
+                <Rewind size={14} fill="currentColor" /> Rewind r{latestCheckpointRound}
               </button>
             )}
           </div>
@@ -394,28 +399,53 @@ export default function HomePage() {
       </header>
 
       <aside className="sidebar">
+        <div className="sidebar-label" style={{ marginTop: 8 }}>Task Input</div>
+        <textarea
+          className="input"
+          placeholder="Describe your task..."
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          disabled={isRunning}
+          style={{ margin: "0 12px 12px", width: "calc(100% - 24px)", resize: "vertical", minHeight: "80px", fontFamily: "inherit", padding: "10px", borderRadius: "var(--radius-sm)", background: "var(--bg-deep)", border: "1px solid var(--glass-border)", color: "var(--text-primary)", outline: "none", boxShadow: "inset 0 2px 4px rgba(0,0,0,0.2)" }}
+        />
         <div className="sidebar-label">Agents</div>
-        {agents.map((agent) => (
-          <div key={agent.id} className="agent-card">
-            <div className="agent-card-head">
-              <span className="agent-name">
-                <span className={`status-dot ${agent.phase}`} />
-                {agent.label}
-              </span>
-              <span className={`phase-pill ${agent.phase}`}>{agent.phase}</span>
-            </div>
-            <div className="agent-detail">
-              R{agent.round} · PDA: {agent.pdaStage || "—"} · {agent.taskTarget || "—"}
-              <br />
-              {formatTime(agent.startedAt)} → {formatTime(agent.endedAt)}
-            </div>
-            {agent.excerpt && (
-              <div className="agent-detail" style={{ marginTop: 4, color: "var(--text-secondary)" }}>
-                {agent.excerpt}
+        {agents.map((agent) => {
+          const p = agent.pdaStage;
+          const isPerceive = p === "perceive";
+          const isDecide = p === "decide";
+          const isAct = p === "act";
+          const donePerceive = isDecide || isAct;
+          const doneDecide = isAct;
+          return (
+            <div key={agent.id} className="agent-card">
+              <div className="agent-card-head">
+                <span className="agent-name">
+                  <span className={`status-dot ${agent.phase}`} />
+                  {agent.label}
+                </span>
+                <span className={`phase-pill ${agent.phase}`}>{agent.phase}</span>
               </div>
-            )}
-          </div>
-        ))}
+              <div className="agent-detail" style={{ marginBottom: 4 }}>
+                R{agent.round} · {agent.taskTarget || "Idling"}
+              </div>
+              {agent.phase === "running" && (
+                <div className="pda-stepper" title={`PDA: ${agent.pdaStage}`}>
+                  <div className={`pda-step ${isPerceive ? "active" : donePerceive ? "done" : ""}`} />
+                  <div className={`pda-step ${isDecide ? "active" : doneDecide ? "done" : ""}`} />
+                  <div className={`pda-step ${isAct ? "active" : ""}`} />
+                </div>
+              )}
+              <div className="agent-detail" style={{ marginTop: 6, fontSize: "0.65rem", opacity: 0.6 }}>
+                {formatTime(agent.startedAt)} → {formatTime(agent.endedAt)}
+              </div>
+              {agent.excerpt && (
+                <div className="agent-detail" style={{ marginTop: 4, color: "var(--text-secondary)", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: 4 }}>
+                  {agent.excerpt}
+                </div>
+              )}
+            </div>
+          );
+        })}
 
         <div className="sidebar-label" style={{ marginTop: 12 }}>
           Checkpoints
@@ -594,10 +624,15 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* Global HAM Memory Status */}
-        <section className="glass-card">
-          <MemoryStatusWidget />
-        </section>
+        {/* Global HAM Memory Status & Antigravity Panel */}
+        <div className="content-grid equal">
+          <section className="glass-card">
+            <MemoryStatusWidget />
+          </section>
+          <section className="glass-card">
+            <AntigravityPanel />
+          </section>
+        </div>
 
         {/* Agent Pipeline */}
         <section className="glass-card">
@@ -649,7 +684,7 @@ export default function HomePage() {
                         {new Date(item.timestampUtc).toLocaleTimeString()} · R{item.round} · {item.type}
                       </span>
                     </div>
-                    <p className="thought-msg">{item.summary}</p>
+                    <div className="markdown-prose"><ReactMarkdown>{item.summary}</ReactMarkdown></div>
                     {item.artifactPath && <div className="thought-artifact">📎 {item.artifactPath}</div>}
                   </article>
                 ))
@@ -731,16 +766,30 @@ export default function HomePage() {
             </div>
 
             <h3 className="section-head">IO Coordinator</h3>
-            <div className="round-list">
-              <div className="round-row">
-                <div className="round-detail">
-                  Calls: {ioSnapshot?.totalCalls ?? 0} · Active: {ioSnapshot?.activeCalls ?? 0} · Retries: {ioSnapshot?.totalRetries ?? 0} · Failures: {ioSnapshot?.failureCount ?? 0}
-                  <br />
-                  Avg latency: {formatDurationMs(ioSnapshot?.averageDurationMs)} · Max latency: {formatDurationMs(ioSnapshot?.maxDurationMs)}
-                  <br />
-                  Context saved: {ioSnapshot?.contextOptimization.estimatedTokensSaved ?? 0} est tokens · Compression: {(ioCompressionRatio * 100).toFixed(1)}%
-                </div>
+            <div className="telemetry-grid">
+              <div className="metric-card">
+                <span className="label">Total Calls</span>
+                <span className="value">{ioSnapshot?.totalCalls ?? 0}</span>
+                <span className="sub">{ioSnapshot?.activeCalls ?? 0} active</span>
               </div>
+              <div className="metric-card">
+                <span className="label">Failures</span>
+                <span className="value" style={{ color: (ioSnapshot?.failureCount ?? 0) > 0 ? "var(--accent-rose)" : "inherit" }}>{ioSnapshot?.failureCount ?? 0}</span>
+                <span className="sub">{ioSnapshot?.totalRetries ?? 0} retries</span>
+              </div>
+              <div className="metric-card">
+                <span className="label">Avg Latency</span>
+                <span className="value">{formatDurationMs(ioSnapshot?.averageDurationMs)}</span>
+                <span className="sub">Max: {formatDurationMs(ioSnapshot?.maxDurationMs)}</span>
+              </div>
+              <div className="metric-card">
+                <span className="label">Compression</span>
+                <span className="value" style={{ color: "var(--accent-emerald)" }}>{(ioCompressionRatio * 100).toFixed(1)}%</span>
+                <span className="sub">{ioSnapshot?.contextOptimization.estimatedTokensSaved ?? 0} tkns saved</span>
+              </div>
+            </div>
+            
+            <div className="round-list" style={{ marginTop: 12 }}>
               {ioSnapshot?.lastError && (
                 <div className="round-row">
                   <div className="round-detail">
@@ -753,17 +802,15 @@ export default function HomePage() {
                 </div>
               )}
               {ioSnapshot?.operations.length ? (
-                ioSnapshot.operations.slice(0, 8).map((operation) => (
-                  <div key={operation.name} className="round-row">
-                    <div className="round-detail">
-                      {operation.name}
-                      <br />
-                      Calls: {operation.callCount} · Retries: {operation.retryCount} · Avg: {formatDurationMs(operation.averageDurationMs)} · Max: {formatDurationMs(operation.maxDurationMs)}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                  {ioSnapshot.operations.slice(0, 8).map((operation) => (
+                    <div key={operation.name} className="badge info" style={{ padding: "4px 8px", fontSize: "0.68rem" }}>
+                      <strong>{operation.name}</strong>: {operation.callCount} calls · {formatDurationMs(operation.averageDurationMs)} avg
                     </div>
-                  </div>
-                ))
+                  ))}
+                </div>
               ) : (
-                <p className="empty-text">No IO telemetry yet.</p>
+                <p className="empty-text">No ops telemetry yet.</p>
               )}
             </div>
 

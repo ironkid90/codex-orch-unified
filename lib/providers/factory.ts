@@ -10,6 +10,7 @@ import type { Provider, ProviderConfig, ProviderType } from "./types";
 import { OpenAIProvider } from "./openai-provider";
 import { AnthropicProvider } from "./anthropic-provider";
 import { OllamaProvider } from "./ollama-provider";
+import { AntigravityProvider } from "./antigravity-provider";
 import { normalizeOpenAIAuthMode, resolveOpenAIBaseUrl } from "./auth";
 
 interface CodexAuthFile {
@@ -62,6 +63,8 @@ export function createProvider(config: ProviderConfig): Provider {
       return new AnthropicProvider(config);
     case "ollama":
       return new OllamaProvider(config);
+    case "antigravity":
+      return new AntigravityProvider(config);
     case "gemini":
       // Gemini uses OpenAI-compatible API via AI Studio
       return new OpenAIProvider({
@@ -132,6 +135,15 @@ export function detectProviderFromEnv(): ProviderConfig | null {
     };
   }
 
+  if (process.env.ANTIGRAVITY_BASE_URL || process.env.ANTIGRAVITY_API_KEY) {
+    return {
+      type: "antigravity",
+      baseUrl: process.env.ANTIGRAVITY_BASE_URL ?? "http://127.0.0.1:8787/v1",
+      apiKey: process.env.ANTIGRAVITY_API_KEY ?? "ag-default",
+      model: process.env.ANTIGRAVITY_MODEL ?? "claude-sonnet-4-5",
+    };
+  }
+
   return null;
 }
 
@@ -178,6 +190,11 @@ export function getAvailableProviders(): Array<{ type: ProviderType; model: stri
       type: "ollama",
       model: process.env.OLLAMA_MODEL ?? "llama3.2",
       available: true, // Always try, may fail at runtime
+    },
+    {
+      type: "antigravity",
+      model: process.env.ANTIGRAVITY_MODEL ?? "claude-sonnet-4-5",
+      available: Boolean(process.env.ANTIGRAVITY_BASE_URL || process.env.ANTIGRAVITY_API_KEY),
     },
   ];
 }

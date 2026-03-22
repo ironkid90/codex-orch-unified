@@ -557,3 +557,11 @@ For reference, typical token savings across different context patterns:
 - **Single subsystem** (~20K tokens) → 60% reduction
 - **Cross-subsystem** (~30K tokens) → 40% reduction
 - **Subagent inference** (~12-18K tokens) → 20-30% reduction per session
+
+
+## Antigravity Integration & UI Polish
+
+- The dashboard now includes a fully integrated **Antigravity Proxy** panel for dynamic agent-to-model routing and quota management.
+- The custom runtime features a **Glassmorphic UI** utilizing `react-markdown` for thought streams, `lucide-react` for transport controls, and visual CSS grids for telemetry metrics.
+- Redundant scrap files and old `.diff` files have been purged from the repository root.
+

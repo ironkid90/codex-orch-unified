@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
 import {
   AGENT_IDS,
@@ -343,6 +345,19 @@ class SwarmStore {
   }
 
   appendMessage(message: AgentMessage): void {
+    if (message.summary && message.summary.length > 5000 && this.state.runId) {
+      const uuid = randomUUID();
+      const runMemoryDir = path.join(process.cwd(), "runs", this.state.runId, "memory");
+      if (!existsSync(runMemoryDir)) {
+        mkdirSync(runMemoryDir, { recursive: true });
+      }
+      const filePath = path.join(runMemoryDir, `${uuid}.txt`);
+      writeFileSync(filePath, message.summary, "utf8");
+      
+      message.summary = `[Context Offloaded] Content saved to: ${filePath}`;
+      message.artifactPath = filePath;
+    }
+
     this.state.messages.push(message);
     if (this.state.messages.length > MAX_EVENTS * 2) {
       this.state.messages = this.state.messages.slice(-MAX_EVENTS * 2);

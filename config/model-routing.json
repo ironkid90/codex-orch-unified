@@ -1,7 +1,7 @@
 {
-  "version": 1,
-  "updatedAt": "2026-03-17T00:13:22.006Z",
-  "source": "swarm-models optimize (live-probe)",
+  "version": 2,
+  "updatedAt": "2026-03-22T08:08:00.000Z",
+  "source": "manual multi-provider prototype release",
   "probes": [
     {
       "candidateId": "codex-primary",
@@ -13,7 +13,7 @@
     {
       "candidateId": "openai-primary",
       "provider": "openai",
-      "model": "codex-5.3",
+      "model": "gpt-5.4",
       "available": false,
       "latencyMs": 1099,
       "detail": "OpenAI OAuth probe failed (401)."
@@ -33,109 +33,150 @@
       "available": false,
       "latencyMs": 644,
       "detail": "Gemini probe failed (403)."
+    },
+    {
+      "candidateId": "anthropic-primary",
+      "provider": "anthropic",
+      "model": "claude-opus-4-6",
+      "available": false,
+      "detail": "Anthropic probe not yet configured."
+    },
+    {
+      "candidateId": "anthropic-fast",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "available": false,
+      "detail": "Anthropic probe not yet configured."
+    },
+    {
+      "candidateId": "antigravity-gateway",
+      "provider": "antigravity",
+      "model": "claude-sonnet-4-5",
+      "available": false,
+      "detail": "Antigravity-Manager local proxy (OpenAI-compatible). Set ANTIGRAVITY_BASE_URL and ANTIGRAVITY_API_KEY to enable."
     }
   ],
   "assignments": {
+    "planner": {
+      "provider": "anthropic",
+      "model": "claude-opus-4-6",
+      "score": 95.0,
+      "rationale": "Best for planning/reasoning tasks."
+    },
     "research": {
-      "provider": "codex",
-      "model": "gpt-5.4",
-      "score": 87.5,
-      "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
+      "provider": "gemini",
+      "model": "gemini-3.1-pro-preview",
+      "score": 92.0,
+      "rationale": "Large context window ideal for cross-file analysis."
     },
     "worker1": {
-      "provider": "codex",
+      "provider": "openai",
       "model": "gpt-5.4",
-      "score": 101.83,
-      "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
+      "score": 98.0,
+      "rationale": "Strong coding capabilities."
     },
     "worker2": {
-      "provider": "codex",
-      "model": "gpt-5.4",
-      "score": 98.92,
-      "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "score": 94.0,
+      "rationale": "Excellent for code auditing and review."
     },
     "evaluator": {
-      "provider": "codex",
-      "model": "gpt-5.4",
-      "score": 97.01,
-      "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
+      "provider": "anthropic",
+      "model": "claude-opus-4-6",
+      "score": 96.0,
+      "rationale": "Deep analysis and evaluation capabilities."
     },
     "coordinator": {
-      "provider": "codex",
+      "provider": "openai",
       "model": "gpt-5.4",
-      "score": 94.9,
-      "rationale": "Codex CLI detected (OAuth login handled by codex CLI session)."
+      "score": 93.0,
+      "rationale": "Strong decision-making for coordination."
     }
   },
   "fallback": {
-    "research": [
+    "planner": [
       {
         "provider": "openai",
-        "model": "codex-5.3",
-        "score": -1000,
-        "rationale": "OpenAI OAuth probe failed (401)."
+        "model": "gpt-5.4",
+        "score": 90.0,
+        "rationale": "OpenAI fallback for planning."
       },
       {
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
-        "score": -1000,
-        "rationale": "Gemini probe failed (403)."
+        "score": 85.0,
+        "rationale": "Gemini fallback for planning."
+      }
+    ],
+    "research": [
+      {
+        "provider": "anthropic",
+        "model": "claude-opus-4-6",
+        "score": 88.0,
+        "rationale": "Anthropic fallback for research."
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-5.4",
+        "score": 82.0,
+        "rationale": "OpenAI fallback for research."
       }
     ],
     "worker1": [
       {
-        "provider": "openai",
-        "model": "codex-5.3",
-        "score": -1000,
-        "rationale": "OpenAI OAuth probe failed (401)."
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "score": 90.0,
+        "rationale": "Anthropic fallback for coding."
       },
       {
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
-        "score": -1000,
-        "rationale": "Gemini probe failed (403)."
+        "score": 85.0,
+        "rationale": "Gemini fallback for coding."
       }
     ],
     "worker2": [
       {
         "provider": "openai",
-        "model": "codex-5.3",
-        "score": -1000,
-        "rationale": "OpenAI OAuth probe failed (401)."
+        "model": "gpt-5.4",
+        "score": 88.0,
+        "rationale": "OpenAI fallback for auditing."
       },
       {
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
-        "score": -1000,
-        "rationale": "Gemini probe failed (403)."
+        "score": 82.0,
+        "rationale": "Gemini fallback for auditing."
       }
     ],
     "evaluator": [
       {
         "provider": "openai",
-        "model": "codex-5.3",
-        "score": -1000,
-        "rationale": "OpenAI OAuth probe failed (401)."
+        "model": "gpt-5.4",
+        "score": 88.0,
+        "rationale": "OpenAI fallback for evaluation."
       },
       {
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
-        "score": -1000,
-        "rationale": "Gemini probe failed (403)."
+        "score": 84.0,
+        "rationale": "Gemini fallback for evaluation."
       }
     ],
     "coordinator": [
       {
-        "provider": "openai",
-        "model": "codex-5.3",
-        "score": -1000,
-        "rationale": "OpenAI OAuth probe failed (401)."
+        "provider": "anthropic",
+        "model": "claude-opus-4-6",
+        "score": 90.0,
+        "rationale": "Anthropic fallback for coordination."
       },
       {
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
-        "score": -1000,
-        "rationale": "Gemini probe failed (403)."
+        "score": 82.0,
+        "rationale": "Gemini fallback for coordination."
       }
     ]
   }

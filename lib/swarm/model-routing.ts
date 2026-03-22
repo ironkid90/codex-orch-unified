@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { AgentId } from "./types";
 
-export type ProviderId = "codex" | "openai" | "gemini" | "anthropic" | "ollama";
+export type ProviderId = "codex" | "openai" | "gemini" | "anthropic" | "ollama" | "antigravity";
 
 export interface RoleExecutionPreference {
   provider: ProviderId;
@@ -31,7 +31,7 @@ function getDefaultResearchExecution(): RoleExecutionPreference {
         process.env.OPENAI_RESEARCH_MODEL ||
         process.env.OPENAI_SWARM_MODEL ||
         process.env.OPENAI_MODEL ||
-        "gpt-5.2",
+        "gpt-5.4",
       rationale: "Default research provider from SWARM_RESEARCH_PROVIDER=openai.",
     };
   }
@@ -50,7 +50,7 @@ function getDefaultResearchExecution(): RoleExecutionPreference {
         ? process.env.VERTEX_AI_MODEL ||
           process.env.GEMINI_SWARM_MODEL ||
           process.env.GEMINI_MODEL ||
-          "gemini-2.5-flash"
+          "gemini-3.1-flash-preview"
         : process.env.GEMINI_MODEL ||
           process.env.GEMINI_SWARM_MODEL ||
           process.env.VERTEX_AI_MODEL ||
@@ -67,7 +67,7 @@ function getDefaultResearchExecution(): RoleExecutionPreference {
 
   return {
     provider: "codex",
-    model: process.env.SWARM_CODEX_MODEL || "codex-5.3",
+    model: process.env.SWARM_CODEX_MODEL || "codex-5.4",
     rationale: "Default research provider from environment.",
   };
 }
@@ -94,7 +94,7 @@ export function defaultRoleExecution(agentId: AgentId): RoleExecutionPreference 
   }
   return {
     provider: "codex",
-    model: process.env.SWARM_CODEX_MODEL || "codex-5.3",
+    model: process.env.SWARM_CODEX_MODEL || "codex-5.4",
     rationale: "Default code orchestration provider.",
   };
 }
@@ -110,7 +110,8 @@ export function normalizeRoleExecution(value: unknown): RoleExecutionPreference 
     provider !== "openai" &&
     provider !== "gemini" &&
     provider !== "anthropic" &&
-    provider !== "ollama"
+    provider !== "ollama" &&
+    provider !== "antigravity"
   ) {
     return null;
   }

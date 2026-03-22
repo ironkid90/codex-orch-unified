@@ -31,10 +31,13 @@ export class GraphExecutor {
   private readonly adj: Map<string, GraphEdge[]>;
   private readonly inc: Map<string, GraphEdge[]>;
 
-  constructor(graph: WorkflowGraph) {
+  private readonly config?: GraphRunConfig;
+
+  constructor(graph: WorkflowGraph, config?: GraphRunConfig) {
     this.graph = graph;
     this.adj = buildAdj(graph);
     this.inc = buildInc(graph);
+    this.config = config;
   }
 
   createInitialState(runId: string): GraphExecutionState {
@@ -59,7 +62,7 @@ export class GraphExecutor {
     const didFail = state.failedNodeIds.includes(nodeId);
     const next: string[] = [];
     for (const edge of edges) {
-      if (edge.type === "sequential" || edge.type === "parallel") {
+      if ((edge.type === "sequential" || edge.type === "parallel") && !didFail) {
         next.push(edge.to);
       } else if (edge.type === "fallback" && didFail) {
         next.push(edge.to);
@@ -98,7 +101,7 @@ export class GraphExecutor {
       if (node.type === "merge") { if (this.isMergeReady(next, candidate)) toQueue.push(candidate); }
       else toQueue.push(candidate);
     }
-    next.currentNodeIds = [...next.currentNodeIds, ...toQueue];
+    next.currentNodeIds = Array.from(new Set([...next.currentNodeIds, ...toQueue]));
     if (next.currentNodeIds.length === 0 && next.status === "running") {
       next.status = "completed";
       next.endedAt = nowIso();
@@ -142,4 +145,60 @@ export class GraphExecutor {
     }
     return Array.from(buckets.keys()).sort((a, b) => a - b).map((k) => buckets.get(k)!);
   }
+
+  async execute(workspace: string, maxRounds: number): Promise<void> {
+    const runId = "run-" + Date.now();
+    let accumulatedContext: Record<string, any> = {};
+
+    for (let round = 1; round <= maxRounds; round++) {
+      if (this.config?.onRoundStart) {
+        await this.config.onRoundStart(round);
+      }
+
+      let state = this.createInitialState(runId);
+      state.context = accumulatedContext;
+
+      while (state.currentNodeIds.length > 0 && !this.isComplete(state)) {
+        const promises = state.currentNodeIds.map(async (nodeId) => {
+          const node = this.getNode(nodeId);
+          if (!node) return { nodeId, status: "failed" as const, error: "Node not found" };
+          
+          if (node.type === "merge") {
+             return { nodeId, status: "completed" as const, round, output: undefined };
+          }
+          if (this.config?.executeNode) {
+             return await this.config.executeNode(node, state.context || {}, round);
+          }
+          return { nodeId, status: "completed" as const, round };
+        });
+
+        const results = await Promise.all(promises);
+
+        for (const res of results) {
+          if (res.status === "completed" && res.output !== undefined) {
+            state.context = state.context || {};
+            state.context[res.nodeId] = res.output; // Dependency state mapped perfectly to LangGraph's state
+          }
+          state = this.advanceState(state, res.nodeId, res as NodeExecutionResult);
+          if (this.config?.onNodeComplete) {
+            await this.config.onNodeComplete(res.nodeId, res as NodeExecutionResult, round);
+          }
+        }
+      }
+
+      accumulatedContext = state.context || {};
+
+      if (this.config?.onRoundEnd) {
+        const shouldContinue = await this.config.onRoundEnd(round, accumulatedContext);
+        if (!shouldContinue) break;
+      }
+    }
+  }
+}
+
+export interface GraphRunConfig {
+  executeNode: (node: GraphNode, context: Record<string, any>, round: number) => Promise<NodeExecutionResult>;
+  onNodeComplete?: (nodeId: string, result: NodeExecutionResult, round: number) => Promise<void>;
+  onRoundStart?: (round: number) => Promise<void>;
+  onRoundEnd?: (round: number, context: Record<string, any>) => Promise<boolean>;
 }

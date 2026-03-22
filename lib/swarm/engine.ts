@@ -26,6 +26,9 @@ import type {
 import { createDefaultToolRegistry, executeToolCall, type ToolRegistry } from "../tools";
 import type { ToolContext as AgentToolContext } from "../tools";
 import { McpClientManager, createMcpToolWrappers } from "./mcp-client";
+import { GraphExecutor } from "./graph-executor";
+import { createDefaultSwarmGraph } from "./graph-dsl";
+import type { WorkflowGraph } from "./graph-types";
 
 import {
   compressForContext,
@@ -189,6 +192,7 @@ interface StartOptions {
   workspace?: string;
   mode?: RunMode;
   features?: Partial<SwarmFeatures>;
+  prompt?: string;
 }
 
 interface StartResult {
@@ -567,7 +571,7 @@ function beginRuntimeHeartbeat(agentId: AgentId, activeStep: string): () => void
 
 function getGeminiConfig(modelOverride?: string, _workspace?: string): GeminiResearchConfig {
   const providerEnabled = (process.env.SWARM_RESEARCH_PROVIDER || "").toLowerCase() === "gemini";
-  const model = modelOverride || process.env.GEMINI_MODEL || "gemini-3-pro";
+  const model = modelOverride || process.env.GEMINI_MODEL || "gemini-3.1-pro-preview";
   const apiKey = process.env.GEMINI_API_KEY || undefined;
   const oauthToken = process.env.GOOGLE_OAUTH_ACCESS_TOKEN || undefined;
   const useAdc = process.env.GOOGLE_USE_ADC === "1";
@@ -1278,7 +1282,7 @@ async function runOpenAIResearch(
   localSignals: string[],
   modelOverride?: string,
 ): Promise<string | null> {
-  const model = modelOverride || process.env.OPENAI_RESEARCH_MODEL || process.env.OPENAI_SWARM_MODEL || "gpt-5.2";
+  const model = modelOverride || process.env.OPENAI_RESEARCH_MODEL || process.env.OPENAI_SWARM_MODEL || "gpt-5.4";
   const prompt = [
     "You are a research assistant inside a coding swarm orchestration runtime.",
     "Summarize key implementation and risk guidance from these local signals.",
@@ -1408,7 +1412,7 @@ async function getGeminiTaskConfig(modelOverride?: string, workspace?: string): 
   const cfg = await getGeminiConfig(modelOverride, workspace);
   return {
     providerEnabled: true,
-    model: modelOverride || process.env.GEMINI_SWARM_MODEL || cfg.model || "gemini-2.5-flash",
+    model: modelOverride || process.env.GEMINI_SWARM_MODEL || cfg.model || "gemini-3.1-flash-preview",
     apiKey: process.env.GEMINI_API_KEY || cfg.apiKey,
     oauthToken: process.env.GOOGLE_OAUTH_ACCESS_TOKEN || cfg.oauthToken,
     useAdc: process.env.GOOGLE_USE_ADC === "1" || cfg.useAdc,
@@ -1512,7 +1516,7 @@ function buildUnifiedProviderConfig(task: AgentTask, provider: Exclude<ProviderI
   if (provider === "openai") {
     return {
       type: "openai",
-      model: modelOverride || process.env.OPENAI_SWARM_MODEL || process.env.OPENAI_MODEL || "gpt-4o",
+      model: modelOverride || process.env.OPENAI_SWARM_MODEL || process.env.OPENAI_MODEL || "gpt-5.4",
       apiKey: process.env.OPENAI_API_KEY,
       baseUrl: resolveOpenAIBaseUrl(process.env.OPENAI_BASE_URL),
       maxTokens,
@@ -1523,7 +1527,7 @@ function buildUnifiedProviderConfig(task: AgentTask, provider: Exclude<ProviderI
   if (provider === "gemini") {
     return {
       type: "gemini",
-      model: modelOverride || process.env.GEMINI_SWARM_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash",
+      model: modelOverride || process.env.GEMINI_SWARM_MODEL || process.env.GEMINI_MODEL || "gemini-3.1-flash-preview",
       apiKey: process.env.GEMINI_API_KEY,
       baseUrl: resolveGeminiCompatibleBaseUrl(),
       maxTokens,
@@ -1534,7 +1538,7 @@ function buildUnifiedProviderConfig(task: AgentTask, provider: Exclude<ProviderI
   if (provider === "anthropic") {
     return {
       type: "anthropic",
-      model: modelOverride || process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5",
+      model: modelOverride || process.env.ANTHROPIC_MODEL || "claude-opus-4-6",
       apiKey: process.env.ANTHROPIC_API_KEY,
       baseUrl: process.env.ANTHROPIC_BASE_URL,
       maxTokens,
@@ -2558,7 +2562,7 @@ function deriveRoundStatus(
   }
   return "REVISE";
 }
-async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunMode }): Promise<void> {
+async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunMode; prompt?: string }): Promise<void> {
   await mkdir(RUNS_DIR, { recursive: true });
   await configureRunToolRegistry(opts.workspace);
   let prevFeedback = "";
@@ -2593,114 +2597,167 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
     });
   }
 
-  for (let round = 1; round <= opts.maxRounds; round += 1) {
-    await processQueuedControlRequests(round);
-    const features = swarmStore.getState().features;
-    const roundTokenBaseline = tokenTracker.getAggregateTotals();
-    await waitIfPaused(round, "round_start");
-    swarmStore.setCurrentRound(round);
-    swarmStore.appendEvent({ type: "round.started", round, message: `Round ${round} started.` });
+  const features = swarmStore.getState().features;
 
-    const roundDir = path.join(RUNS_DIR, `round-${round}`);
-    await mkdir(roundDir, { recursive: true });
-    await writeFile(path.join(roundDir, MESSAGE_FILE), "", "utf8");
+  const graph: WorkflowGraph = createDefaultSwarmGraph();
+  
+  // Conditionally disable planner/research based on features
+  if (!features.researchAgent) {
+    graph.entryNodeId = "worker1";
+    graph.nodes = graph.nodes.filter(n => n.id !== "research" && n.id !== "planner");
+    graph.edges = graph.edges.filter(e => e.from !== "research" && e.to !== "research" && e.from !== "planner" && e.to !== "planner");
+  } else {
+    graph.entryNodeId = "planner"; // Ensure planner is entry
+  }
 
-    if (features.checkpointing) {
-      await createCheckpoint(round, opts.workspace);
-      swarmStore.appendEvent({ type: "checkpoint.created", round, message: `Checkpoint round ${round} created.` });
-    }
+  let roundDir = "";
+  let lint: any = { passed: true, exitCode: 0, command: "disabled", ran: false };
+  let changedFiles: string[] = [];
+  let worker2Skipped = false;
+  let roundTokenBaseline: TokenUsage;
 
-    const [baseW1, baseW2, baseEval, baseCoord] = await Promise.all([
-      readPrompt("worker1"),
-      readPrompt("worker2"),
-      readPrompt("evaluator"),
-      readPrompt("coordinator"),
-    ]);
+  const executor = new GraphExecutor(graph, {
+    onRoundStart: async (round) => {
+      await processQueuedControlRequests(round);
+      const fsStore = swarmStore.getState().features;
+      roundTokenBaseline = tokenTracker.getAggregateTotals();
+      await waitIfPaused(round, "round_start");
+      swarmStore.setCurrentRound(round);
+      swarmStore.appendEvent({ type: "round.started", round, message: `Round ${round} started.` });
 
-    const researchResult = features.researchAgent
-      ? await runResearch(round, opts.workspace, opts.mode, roundDir, prevFeedback, roleExecutions.research)
-      : null;
-    const evaluatorHistorySuffix = prevFeedback
-      ? `\n\n--- PREVIOUS EVALUATOR FEEDBACK ---\n${maybeCompress(prevFeedback, features.contextCompression)}`
-      : "";
-    const researchSuffix =
-      researchResult?.text
-        ? `\n\n--- RESEARCH CONTEXT ---\n${maybeCompress(researchResult.text, features.contextCompression)}`
+      roundDir = path.join(RUNS_DIR, `round-${round}`);
+      await mkdir(roundDir, { recursive: true });
+      await writeFile(path.join(roundDir, MESSAGE_FILE), "", "utf8");
+
+      if (fsStore.checkpointing) {
+        await createCheckpoint(round, opts.workspace);
+        swarmStore.appendEvent({ type: "checkpoint.created", round, message: `Checkpoint round ${round} created.` });
+      }
+    },
+    executeNode: async (node, context, round) => {
+      const fsStore = swarmStore.getState().features;
+      const [baseW1, baseW2, baseEval, baseCoord] = await Promise.all([
+        readPrompt("worker1"),
+        readPrompt("worker2"),
+        readPrompt("evaluator"),
+        readPrompt("coordinator"),
+      ]);
+
+      const evaluatorHistorySuffix = prevFeedback
+        ? `\n\n--- PREVIOUS EVALUATOR FEEDBACK ---\n${maybeCompress(prevFeedback, fsStore.contextCompression)}`
         : "";
-    const batchArtifactSuffix = batchArtifacts.text
-      ? `\n\n--- BATCH ARTIFACT CONTEXT ---\n${maybeCompress(batchArtifacts.text, features.contextCompression)}`
-      : "";
-    const nextActionAssignments = assignNextActions(carryNextActions);
-    const worker1DirectiveSuffix = [
-      formatDirectiveBlock("PREVIOUS EVALUATOR DIRECTIVES (WORKER-1 ONLY)", carryW1Directives),
-      formatDirectiveBlock("PREVIOUS COORDINATOR NEXT_ACTIONS (WORKER-1 OWNERSHIP)", nextActionAssignments.worker1),
-    ].join("");
-    const worker2DirectiveSuffix = [
-      formatDirectiveBlock("PREVIOUS EVALUATOR DIRECTIVES (WORKER-2 ONLY)", carryW2Directives),
-      formatDirectiveBlock("PREVIOUS COORDINATOR NEXT_ACTIONS (WORKER-2 OWNERSHIP)", nextActionAssignments.worker2),
-    ].join("");
+      const batchArtifactSuffix = batchArtifacts.text
+        ? `\n\n--- BATCH ARTIFACT CONTEXT ---\n${maybeCompress(batchArtifacts.text, fsStore.contextCompression)}`
+        : "";
+      const researchSuffix = context["research"]?.text
+        ? `\n\n--- RESEARCH CONTEXT ---\n${maybeCompress(context["research"].text, fsStore.contextCompression)}`
+        : "";
 
-    const before = features.heuristicSelector || features.lintLoop ? await collectFingerprints(opts.workspace) : new Map();
+      if (node.id === "planner") {
+        const basePlanner = await readPrompt("planner").catch((_) => "You are a planner. Outline the steps to solve the issue. Ensure to capture critical edge-cases.");
+        const finalPrompt = opts.prompt ? `${basePlanner}\n\n--- USER REQUEST ---\n${opts.prompt}` : basePlanner;
+        const plannerText = await runAgentTask({
+          agentId: "planner",
+          round,
+          prompt: `${finalPrompt}\n\nWorkspace Directory: ${opts.workspace}`,
+          outFile: path.join(roundDir, "planner.md"),
+          workspace: opts.workspace,
+          mode: opts.mode,
+          roundDir,
+          target: "research",
+          execution: roleExecutions.planner || roleExecutions.research,
+        });
+        return { nodeId: node.id, status: "completed", retryCount: 0, output: plannerText };
+      }
 
-    const worker1 = await runAgentTask({
-      agentId: "worker1",
-      round,
-      prompt: `${baseW1}${researchSuffix}${batchArtifactSuffix}${worker1DirectiveSuffix}`,
-      outFile: path.join(roundDir, "worker1.md"),
-      workspace: opts.workspace,
-      mode: opts.mode,
-      roundDir,
-      target: "coordinator",
-      execution: roleExecutions.worker1,
-    });
+      if (node.id === "research") {
+        const plannerContext = context["planner"]?.text
+          ? `\n\n--- PLANNER DIRECTIVES ---\n${maybeCompress(context["planner"].text, fsStore.contextCompression)}`
+          : "";
+        const combinedSeed = plannerContext ? `${prevFeedback}\n${plannerContext}` : prevFeedback;
+        const res = await runResearch(round, opts.workspace, opts.mode, roundDir, combinedSeed, roleExecutions.research);
+        return { nodeId: node.id, status: "completed", retryCount: 0, output: res };
+      }
 
-    const after = features.heuristicSelector || features.lintLoop ? await collectFingerprints(opts.workspace) : new Map();
-    const changedFiles = diffFingerprints(before, after);
-    swarmStore.appendEvent({
-      type: "workspace.diff",
-      round,
-      message: `Worker-1 changed ${changedFiles.length} tracked files.`,
-      metadata: { changedFiles: changedFiles.slice(0, 20) },
-    });
+      if (node.id === "worker1") {
+        const nextActionAssignments = assignNextActions(carryNextActions);
+        const worker1DirectiveSuffix = [
+          formatDirectiveBlock("PREVIOUS EVALUATOR DIRECTIVES (WORKER-1 ONLY)", carryW1Directives),
+          formatDirectiveBlock("PREVIOUS COORDINATOR NEXT_ACTIONS (WORKER-1 OWNERSHIP)", nextActionAssignments.worker1),
+        ].join("");
 
-    const lint = features.lintLoop
-      ? await runLint(round, opts.workspace, roundDir, changedFiles)
-      : { round, command: "disabled", ran: false, passed: true, exitCode: 0 };
-    swarmStore.upsertLintResult(lint);
-    swarmStore.appendEvent({
-      type: "lint.finished",
-      round,
-      level: lint.passed ? "info" : "warn",
-      message: lint.ran
-        ? lint.passed
-          ? "Lint loop passed."
-          : `Lint loop failed (exit ${lint.exitCode}).`
-        : lint.command,
-    });
+        const before = fsStore.heuristicSelector || fsStore.lintLoop ? await collectFingerprints(opts.workspace) : new Map();
 
-    const evaluatorPromise = runAgentTask({
-      agentId: "evaluator",
-      round,
-      prompt: `${baseEval}${evaluatorHistorySuffix}${researchSuffix}${batchArtifactSuffix}${formatDirectiveBlock(
-        "PREVIOUS COORDINATOR NEXT_ACTIONS",
-        carryNextActions,
-      )}\n\n--- WORKER-1 OUTPUT ---\n${maybeCompress(worker1.text, features.contextCompression)}`,
-      outFile: path.join(roundDir, "evaluator.md"),
-      workspace: opts.workspace,
-      mode: opts.mode,
-      roundDir,
-      target: "coordinator",
-      execution: roleExecutions.evaluator,
-    });
+        const worker1 = await runAgentTask({
+          agentId: "worker1",
+          round,
+          prompt: `${baseW1}${researchSuffix}${batchArtifactSuffix}${worker1DirectiveSuffix}`,
+          outFile: path.join(roundDir, "worker1.md"),
+          workspace: opts.workspace,
+          mode: opts.mode,
+          roundDir,
+          target: "coordinator",
+          execution: roleExecutions.worker1,
+        });
 
-    let worker2Skipped = false;
-    const worker2Promise =
-      features.heuristicSelector && changedFiles.length === 0
-        ? (async () => {
+        const after = fsStore.heuristicSelector || fsStore.lintLoop ? await collectFingerprints(opts.workspace) : new Map();
+        changedFiles = diffFingerprints(before, after);
+        swarmStore.appendEvent({
+          type: "workspace.diff",
+          round,
+          message: `Worker-1 changed ${changedFiles.length} tracked files.`,
+          metadata: { changedFiles: changedFiles.slice(0, 20) },
+        });
+
+        lint = fsStore.lintLoop
+          ? await runLint(round, opts.workspace, roundDir, changedFiles)
+          : { round, command: "disabled", ran: false, passed: true, exitCode: 0 };
+        swarmStore.upsertLintResult(lint);
+        swarmStore.appendEvent({
+          type: "lint.finished",
+          round,
+          level: lint.passed ? "info" : "warn",
+          message: lint.ran
+            ? lint.passed
+              ? "Lint loop passed."
+              : `Lint loop failed (exit ${lint.exitCode}).`
+            : lint.command,
+        });
+
+        return { nodeId: node.id, status: "completed", retryCount: 0, output: worker1 };
+      }
+
+      if (node.id === "evaluator") {
+        const worker1 = context["worker1"];
+        const evaluator = await runAgentTask({
+          agentId: "evaluator",
+          round,
+          prompt: `${baseEval}${evaluatorHistorySuffix}${researchSuffix}${batchArtifactSuffix}${formatDirectiveBlock(
+            "PREVIOUS COORDINATOR NEXT_ACTIONS",
+            carryNextActions,
+          )}\n\n--- WORKER-1 OUTPUT ---\n${maybeCompress(worker1?.text || "", fsStore.contextCompression)}`,
+          outFile: path.join(roundDir, "evaluator.md"),
+          workspace: opts.workspace,
+          mode: opts.mode,
+          roundDir,
+          target: "coordinator",
+          execution: roleExecutions.evaluator,
+        });
+        return { nodeId: node.id, status: "completed", retryCount: 0, output: evaluator };
+      }
+
+      if (node.id === "worker2") {
+        const worker1 = context["worker1"];
+        const nextActionAssignments = assignNextActions(carryNextActions);
+        const worker2DirectiveSuffix = [
+          formatDirectiveBlock("PREVIOUS EVALUATOR DIRECTIVES (WORKER-2 ONLY)", carryW2Directives),
+          formatDirectiveBlock("PREVIOUS COORDINATOR NEXT_ACTIONS (WORKER-2 OWNERSHIP)", nextActionAssignments.worker2),
+        ].join("");
+
+        if (fsStore.heuristicSelector && changedFiles.length === 0) {
           worker2Skipped = true;
           const outFile = path.join(roundDir, "worker2.md");
-          const text =
-            "1) COVERAGE TABLE:\n- no tracked file changes\n\n2) DEFECTS:\n- none\n\n3) PERFORMANCE CHECK:\n- skipped\n\n4) DECISION: SKIPPED_NO_CHANGES";
+          const text = "1) COVERAGE TABLE:\n- no tracked file changes\n\n2) DEFECTS:\n- none\n\n3) PERFORMANCE CHECK:\n- skipped\n\n4) DECISION: SKIPPED_NO_CHANGES";
           await writeFile(outFile, text, "utf8");
           swarmStore.setAgentState("worker2", {
             phase: "completed",
@@ -2712,13 +2769,14 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
             pdaStage: "act",
             taskTarget: "coordinator",
           });
-          return { text, outFile, sha256: hashText(text), failed: false } as AgentTaskResult;
-        })()
-        : runAgentTask({
+          return { nodeId: node.id, status: "completed", retryCount: 0, output: { text, outFile, sha256: hashText(text), failed: false } };
+        }
+
+        const worker2 = await runAgentTask({
           agentId: "worker2",
           round,
           prompt: `${baseW2}${researchSuffix}${batchArtifactSuffix}${worker2DirectiveSuffix}\n\n--- TRACKED CHANGED FILES ---\n${changedFiles.length ? changedFiles.join("\n") : "(none)"
-            }\n\n--- WORKER-1 OUTPUT ---\n${maybeCompress(worker1.text, features.contextCompression)}`,
+            }\n\n--- WORKER-1 OUTPUT ---\n${maybeCompress(worker1?.text || "", fsStore.contextCompression)}`,
           outFile: path.join(roundDir, "worker2.md"),
           workspace: opts.workspace,
           mode: opts.mode,
@@ -2726,91 +2784,72 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
           target: "coordinator",
           execution: roleExecutions.worker2,
         });
+        return { nodeId: node.id, status: "completed", retryCount: 0, output: worker2 };
+      }
 
-    const [worker2, evaluator] = await Promise.all([worker2Promise, evaluatorPromise]);
-    prevFeedback = evaluator.text;
+      if (node.id === "coordinator") {
+        const worker1 = context["worker1"];
+        const worker2 = context["worker2"];
+        const evaluator = context["evaluator"];
+        const previousDecision = prevCoordinatorContext
+          ? `${prevCoordinatorContext.status} (round ${prevCoordinatorContext.round}, variant ${prevCoordinatorContext.variant})`
+          : "None (start of run)";
+        const continuityBlock = [
+          "--- HISTORY & CONTINUITY ---",
+          "Previous Round Decision:",
+          previousDecision,
+          "Adaptive Guidance:",
+          buildAdaptiveGuidance(prevCoordinatorContext),
+          "",
+          formatContinuityList("Carry-over evaluator COORDINATION_RULES", carryCoordinatorRules),
+          formatContinuityList("Carry-over coordinator NEXT_ACTIONS", carryNextActions),
+        ].join("\n");
 
-    const previousDecision: string = prevCoordinatorContext
-      ? `${prevCoordinatorContext.status} (round ${prevCoordinatorContext.round}, variant ${prevCoordinatorContext.variant})`
-      : "None (start of run)";
-    const continuityBlock: string = [
-      "--- HISTORY & CONTINUITY ---",
-      "Previous Round Decision:",
-      previousDecision,
-      "Adaptive Guidance:",
-      buildAdaptiveGuidance(prevCoordinatorContext),
-      "",
-      formatContinuityList("Carry-over evaluator COORDINATION_RULES", carryCoordinatorRules),
-      formatContinuityList("Carry-over coordinator NEXT_ACTIONS", carryNextActions),
-    ].join("\n");
+        const coordinatorPrompt = `${baseCoord}\n\nRound: ${round}\nWorkspace: ${opts.workspace}\nLint: ran=${lint.ran}; passed=${lint.passed}; command=${lint.command}; exit=${lint.exitCode}\nChanged files (${changedFiles.length}):\n${changedFiles.length ? changedFiles.join("\n") : "(none)"}\n\n${continuityBlock}\n\nResearch:\n${context["research"] ? maybeCompress(context["research"].text, fsStore.contextCompression) : "(disabled)"}\n\nBatch Artifact Context:\n${batchArtifacts.text ? maybeCompress(batchArtifacts.text, fsStore.contextCompression) : "(none)"}\n\nWorker-1 Output:\n${maybeCompress(worker1?.text || "", fsStore.contextCompression)}\n\nWorker-2 Output:\n${maybeCompress(worker2?.text || "", fsStore.contextCompression)}\n\nEvaluator Output:\n${maybeCompress(evaluator?.text || "", fsStore.contextCompression)}\n`;
 
-    const coordinatorPrompt: string = `${baseCoord}
+        const coordinator = fsStore.ensembleVoting
+          ? await runCoordinatorEnsemble(round, opts.workspace, opts.mode, roundDir, coordinatorPrompt, roleExecutions.coordinator)
+          : await runAgentTask({
+              agentId: "coordinator",
+              round,
+              prompt: coordinatorPrompt,
+              outFile: path.join(roundDir, "coordinator.md"),
+              workspace: opts.workspace,
+              mode: opts.mode,
+              roundDir,
+              target: "broadcast",
+              execution: roleExecutions.coordinator,
+            });
+        return { nodeId: node.id, status: "completed", retryCount: 0, output: coordinator };
+      }
 
-Round: ${round}
-Workspace: ${opts.workspace}
-Lint: ran=${lint.ran}; passed=${lint.passed}; command=${lint.command}; exit=${lint.exitCode}
-Changed files (${changedFiles.length}):
-${changedFiles.length ? changedFiles.join("\n") : "(none)"}
+      return { nodeId: node.id, status: "completed", retryCount: 0 };
+    },
+    onRoundEnd: async (round, context) => {
+      const fsStore = swarmStore.getState().features;
+      const coordinator = context["coordinator"];
+      const worker2 = context["worker2"];
+      const evaluator = context["evaluator"];
 
-${continuityBlock}
+      prevFeedback = evaluator?.text || "";
 
-Research:
-${researchResult ? maybeCompress(researchResult.text, features.contextCompression) : "(disabled)"}
-
-Batch Artifact Context:
-${batchArtifacts.text ? maybeCompress(batchArtifacts.text, features.contextCompression) : "(none)"}
-
-Worker-1 Output:
-${maybeCompress(worker1.text, features.contextCompression)}
-
-Worker-2 Output:
-${maybeCompress(worker2.text, features.contextCompression)}
-
-Evaluator Output:
-${maybeCompress(evaluator.text, features.contextCompression)}
-`;
-
-    const coordinator: AgentTaskResult | EnsembleTaskResult = features.ensembleVoting
-      ? await runCoordinatorEnsemble(
-        round,
-        opts.workspace,
-        opts.mode,
-        roundDir,
-        coordinatorPrompt,
-        roleExecutions.coordinator,
-      )
-      : await runAgentTask({
-        agentId: "coordinator",
-        round,
-        prompt: coordinatorPrompt,
-        outFile: path.join(roundDir, "coordinator.md"),
-        workspace: opts.workspace,
-        mode: opts.mode,
-        roundDir,
-        target: "broadcast",
-        execution: roleExecutions.coordinator,
-      });
-
-    const coordStatus = parseCoordinatorStatus(coordinator.text);
-    const worker2Decision = parseWorker2Decision(worker2.text) || (worker2Skipped ? "SKIPPED_NO_CHANGES" : undefined);
-    const evalStatus = parseEvaluatorStatus(evaluator.text);
+    const coordStatus = parseCoordinatorStatus(coordinator?.text || "");
+    const worker2Decision = parseWorker2Decision(worker2?.text || "") || (worker2Skipped ? "SKIPPED_NO_CHANGES" : undefined);
+    const evalStatus = parseEvaluatorStatus(evaluator?.text || "");
     const finalStatus = deriveRoundStatus(coordStatus, worker2Decision, evalStatus, lint.passed);
 
     const notes: string[] = [];
-    if (worker2Decision) {
-      notes.push(`Worker-2 decision: ${worker2Decision}`);
-    }
-    if (evalStatus) {
-      notes.push(`Evaluator status: ${evalStatus}`);
-    }
+    if (worker2Decision) notes.push(`Worker-2 decision: ${worker2Decision}`);
+    if (evalStatus) notes.push(`Evaluator status: ${evalStatus}`);
     notes.push(`Lint: ${lint.passed ? "PASS" : `FAIL (${lint.exitCode})`}`);
     notes.push(
       changedFiles.length === 0
         ? "Heuristic selector: no tracked file changes."
         : `Tracked changed files: ${changedFiles.slice(0, 6).join(", ")}`,
     );
-    notes.push(...parseRisks(coordinator.text));
-    const roundTokenTotals = subtractTokenUsage(tokenTracker.getAggregateTotals(), roundTokenBaseline);
+    notes.push(...parseRisks(coordinator?.text || ""));
+    let roundTokenTotals = subtractTokenUsage(tokenTracker.getAggregateTotals(), roundTokenBaseline);
+    if (!roundTokenTotals) roundTokenTotals = createTokenUsage();
     notes.push(`Tokens: ${formatTokenUsage(roundTokenTotals)}`);
 
     swarmStore.upsertRound({
@@ -2830,36 +2869,19 @@ ${maybeCompress(evaluator.text, features.contextCompression)}
       type: "round.finished",
       round,
       message: `Round ${round} finished with ${finalStatus}.`,
-      metadata: {
-        worker2Decision,
-        evalStatus,
-        coordStatus,
-        lintPassed: lint.passed,
-        roundTokenTotals,
-        aggregateTokenTotals: tokenTracker.getAggregateTotals(),
-      },
+      metadata: { worker2Decision, evalStatus, coordStatus, lintPassed: lint.passed, roundTokenTotals, aggregateTokenTotals: tokenTracker.getAggregateTotals() },
     });
 
-    carryW1Directives = mergeDirectiveLists(carryW1Directives, parseStructuredSection(evaluator.text, "PROMPT_UPDATES_W1"), 10);
-    carryW2Directives = mergeDirectiveLists(carryW2Directives, parseStructuredSection(evaluator.text, "PROMPT_UPDATES_W2"), 10);
-    carryCoordinatorRules = mergeDirectiveLists(
-      carryCoordinatorRules,
-      parseStructuredSection(evaluator.text, "COORDINATION_RULES"),
-      10,
-    );
-    carryNextActions = mergeDirectiveLists(carryNextActions, parseStructuredSection(coordinator.text, "NEXT_ACTIONS"), 12);
-    const selectedVariant: string = isEnsembleTaskResult(coordinator) ? coordinator.selectedVariant : "single";
-    prevCoordinatorContext = {
-      round,
-      status: finalStatus,
-      variant: selectedVariant,
-    };
+    carryW1Directives = mergeDirectiveLists(carryW1Directives, parseStructuredSection(evaluator?.text || "", "PROMPT_UPDATES_W1"), 10);
+    carryW2Directives = mergeDirectiveLists(carryW2Directives, parseStructuredSection(evaluator?.text || "", "PROMPT_UPDATES_W2"), 10);
+    carryCoordinatorRules = mergeDirectiveLists(carryCoordinatorRules, parseStructuredSection(evaluator?.text || "", "COORDINATION_RULES"), 10);
+    carryNextActions = mergeDirectiveLists(carryNextActions, parseStructuredSection(coordinator?.text || "", "NEXT_ACTIONS"), 12);
+    const selectedVariant = isEnsembleTaskResult(coordinator) ? coordinator.selectedVariant : "single";
+    prevCoordinatorContext = { round, status: finalStatus, variant: selectedVariant };
 
-    const defects = parseDefectSeverities(worker2.text);
-    const shouldRewind =
-      features.checkpointing &&
-      round > 1 &&
-      (coordStatus === "FAIL" || (!lint.passed && (defects.high > 0 || defects.med > 0)));
+    const defects = parseDefectSeverities(worker2?.text || "");
+    const shouldRewind = fsStore.checkpointing && round > 1 && (coordStatus === "FAIL" || (!lint.passed && (defects.high > 0 || defects.med > 0)));
+    
     if (shouldRewind) {
       const targetRound = round - 1;
       const restored = await restoreCheckpoint(targetRound, opts.workspace);
@@ -2870,7 +2892,7 @@ ${maybeCompress(evaluator.text, features.contextCompression)}
         message: `Auto-rewind to checkpoint round ${targetRound}.`,
         metadata: { targetRound, restoredCount: restored },
       });
-      if (features.humanInLoop || features.checkpointing) {
+      if (fsStore.humanInLoop || fsStore.checkpointing) {
         swarmStore.setPaused(true, `Auto-paused after rewind to round ${targetRound}.`);
         await waitIfPaused(round, "post_rewind_review");
       }
@@ -2878,11 +2900,18 @@ ${maybeCompress(evaluator.text, features.contextCompression)}
 
     if (finalStatus === "PASS") {
       swarmStore.finishRun("Coordinator, evaluator, and auditor reached PASS.");
-      return;
+      return false; // Exit loop
     }
-  }
+    return true; // continue next round
+    }
+  });
 
-  swarmStore.finishRun("Reached max rounds; revisions still required.");
+  await executor.execute(opts.workspace, opts.maxRounds);
+  
+  const sStore = swarmStore.getState();
+  if (sStore.running) {
+    swarmStore.finishRun("Reached max rounds; revisions still required.");
+  }
 }
 
 export function getActiveRunPromise(): Promise<void> | null {
@@ -3101,7 +3130,7 @@ export function startSwarmRun(options: StartOptions = {}): StartResult {
     IOCoordinator.reset();
     const features = swarmStore.getState().features;
 
-    activeRunPromise = runSwarm({ maxRounds, workspace, mode })
+    activeRunPromise = runSwarm({ maxRounds, workspace, mode, prompt: options.prompt })
       .catch((error) => swarmStore.failRun(error))
       .finally(async () => {
         await teardownRunToolRegistry().catch((error) => {

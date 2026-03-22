@@ -10,7 +10,7 @@ import OpenAI from "openai";
 import { resolveGeminiAuth, resolveOpenAIAuth } from "../lib/providers/auth";
 import type { AgentId } from "../lib/swarm/types";
 
-type ProviderId = "codex" | "openai" | "gemini";
+type ProviderId = "codex" | "openai" | "gemini" | "anthropic";
 
 interface ModelCandidate {
   id: string;
@@ -116,6 +116,13 @@ function inferCapabilities(provider: ProviderId, model: string): CapabilityVecto
     }
     return { coding: 0.86, reasoning: 0.9, context: 0.96, speed: 0.82, cost: 0.75 };
   }
+  if (provider === "anthropic") {
+    if (lower.includes("sonnet")) {
+      return { coding: 0.92, reasoning: 0.9, context: 0.88, speed: 0.88, cost: 0.65 };
+    }
+    // opus — deep reasoning
+    return { coding: 0.93, reasoning: 0.97, context: 0.9, speed: 0.72, cost: 0.45 };
+  }
   if (lower.includes("mini")) {
     return { coding: 0.8, reasoning: 0.82, context: 0.75, speed: 0.94, cost: 0.92 };
   }
@@ -123,8 +130,8 @@ function inferCapabilities(provider: ProviderId, model: string): CapabilityVecto
 }
 
 function loadCandidates(): ModelCandidate[] {
-  const codexModel = process.env.SWARM_CODEX_MODEL || "codex-5.3";
-  const openAiModel = process.env.OPENAI_SWARM_MODEL || "gpt-5.2";
+  const codexModel = process.env.SWARM_CODEX_MODEL || "codex-5.4";
+  const openAiModel = process.env.OPENAI_SWARM_MODEL || "gpt-5.4";
   const geminiModel = process.env.VERTEX_AI_MODEL || process.env.GEMINI_SWARM_MODEL || "gemini-3.1-pro-preview";
   const geminiFast = process.env.GEMINI_SWARM_FAST_MODEL || "gemini-3.1-flash-preview";
 
@@ -156,6 +163,20 @@ function loadCandidates(): ModelCandidate[] {
       model: geminiFast,
       label: "Gemini fast",
       capabilities: inferCapabilities("gemini", geminiFast),
+    },
+    {
+      id: "anthropic-primary",
+      provider: "anthropic",
+      model: process.env.ANTHROPIC_MODEL || "claude-opus-4-6",
+      label: "Anthropic primary",
+      capabilities: inferCapabilities("anthropic", process.env.ANTHROPIC_MODEL || "claude-opus-4-6"),
+    },
+    {
+      id: "anthropic-fast",
+      provider: "anthropic",
+      model: process.env.ANTHROPIC_FAST_MODEL || "claude-sonnet-4-5",
+      label: "Anthropic fast",
+      capabilities: inferCapabilities("anthropic", process.env.ANTHROPIC_FAST_MODEL || "claude-sonnet-4-5"),
     },
   ];
 }
@@ -367,10 +388,22 @@ async function probeCandidate(candidate: ModelCandidate): Promise<ProbeResult> {
   if (candidate.provider === "openai") {
     return probeOpenAI(candidate);
   }
+  if (candidate.provider === "anthropic") {
+    // Anthropic probe: check for API key presence (live probe not yet implemented)
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    return {
+      candidateId: candidate.id,
+      provider: candidate.provider,
+      model: candidate.model,
+      available: !!apiKey,
+      detail: apiKey ? "Anthropic API key found." : "Missing ANTHROPIC_API_KEY.",
+    };
+  }
   return probeGemini(candidate);
 }
 
 const roleWeights: Record<AgentId, CapabilityVector> = {
+  planner: { coding: 0.1, reasoning: 0.4, context: 0.3, speed: 0.1, cost: 0.1 },
   research: { coding: 0.08, reasoning: 0.32, context: 0.35, speed: 0.15, cost: 0.1 },
   worker1: { coding: 0.45, reasoning: 0.25, context: 0.14, speed: 0.1, cost: 0.06 },
   worker2: { coding: 0.28, reasoning: 0.42, context: 0.18, speed: 0.04, cost: 0.08 },
@@ -379,11 +412,12 @@ const roleWeights: Record<AgentId, CapabilityVector> = {
 };
 
 const providerRoleBias: Record<AgentId, Partial<Record<ProviderId, number>>> = {
-  research: { gemini: 8, openai: 6, codex: 2 },
-  worker1: { codex: 10, openai: 8, gemini: 6 },
-  worker2: { openai: 9, codex: 8, gemini: 7 },
-  evaluator: { openai: 9, gemini: 8, codex: 7 },
-  coordinator: { openai: 10, gemini: 8, codex: 7 },
+  planner: { gemini: 8, openai: 9, codex: 4, anthropic: 10 },
+  research: { gemini: 8, openai: 6, codex: 2, anthropic: 5 },
+  worker1: { codex: 10, openai: 8, gemini: 6, anthropic: 7 },
+  worker2: { openai: 9, codex: 8, gemini: 7, anthropic: 9 },
+  evaluator: { openai: 9, gemini: 8, codex: 7, anthropic: 10 },
+  coordinator: { openai: 10, gemini: 8, codex: 7, anthropic: 7 },
 };
 
 function scoreCandidateForRole(role: AgentId, candidate: ModelCandidate, probe: ProbeResult): number {

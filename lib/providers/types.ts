@@ -3,7 +3,7 @@
  * Supports OpenAI, Anthropic, Gemini, Ollama, and any OpenAI-compatible API
  */
 
-export type ProviderType = "openai" | "anthropic" | "gemini" | "ollama" | "openai-compatible" | "azure-openai";
+export type ProviderType = "openai" | "anthropic" | "gemini" | "ollama" | "openai-compatible" | "azure-openai" | "antigravity";
 
 export interface ModelInfo {
   id: string;

@@ -24,6 +24,7 @@ export function serializeGraph(graph: WorkflowGraph): string {
 
 export function createDefaultSwarmGraph(): WorkflowGraph {
   const nodes: GraphNode[] = [
+    { id: "planner",     type: "agent", label: "Planner",     agentRole: "Planner"     },
     { id: "research",    type: "agent", label: "Research",    agentRole: "Research"    },
     { id: "worker1",     type: "agent", label: "Worker-1",    agentRole: "Worker-1"    },
     { id: "worker2",     type: "agent", label: "Worker-2",    agentRole: "Worker-2"    },
@@ -31,6 +32,7 @@ export function createDefaultSwarmGraph(): WorkflowGraph {
     { id: "coordinator", type: "agent", label: "Coordinator", agentRole: "Coordinator" },
   ];
   const edges: GraphEdge[] = [
+    { id: "e0", from: "planner",   to: "research",    type: "sequential" },
     { id: "e1", from: "research",  to: "worker1",     type: "sequential" },
     { id: "e2", from: "worker1",   to: "worker2",     type: "sequential" },
     { id: "e3", from: "worker2",   to: "evaluator",   type: "sequential" },
@@ -38,6 +40,6 @@ export function createDefaultSwarmGraph(): WorkflowGraph {
   ];
   return {
     id: "default-swarm-graph", name: "Default Swarm Workflow", version: "1.0.0",
-    nodes, edges, entryNodeId: "research", exitNodeIds: ["coordinator"],
+    nodes, edges, entryNodeId: "planner", exitNodeIds: ["coordinator"],
   };
 }

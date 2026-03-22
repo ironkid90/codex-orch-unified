@@ -1,6 +1,3 @@
-// app/components/MemoryStatusWidget.tsx
-// Dashboard widget for HAM memory status and refresh controls
-
 "use client";
 
 import { useEffect, useState } from "react";
@@ -72,8 +69,8 @@ export function MemoryStatusWidget() {
 
   if (!status) {
     return (
-      <div className="border rounded-lg p-4 bg-gray-50" data-testid="memory-status-widget">
-        <p className="text-sm text-gray-500">Loading memory status...</p>
+      <div className="glass-card" data-testid="memory-status-widget">
+        <p className="empty-text">Loading memory status...</p>
       </div>
     );
   }
@@ -84,154 +81,134 @@ export function MemoryStatusWidget() {
   const isCritical = tokenPercentUsed > 90;
 
   return (
-    <div className="border rounded-lg p-4 bg-gradient-to-br from-blue-50 to-indigo-50 space-y-4" data-testid="memory-status-widget">
-      <div className="flex justify-between items-center">
-        <h3 className="text-lg font-semibold" data-testid="memory-status-heading">🧠 Global HAM Memory Status</h3>
-        <button
-          onClick={fetchStatus}
-          disabled={loading}
-          className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
-        >
-          {loading ? "..." : "Refresh"}
-        </button>
-      </div>
-
-      {lastRefresh && (
-        <p className="text-xs text-gray-500">Last checked: {lastRefresh}</p>
-      )}
-
-      {/* Inbox Stats */}
-      <div className="grid grid-cols-3 gap-2">
-        <div className="bg-white rounded p-3 border-l-4 border-yellow-400">
-          <div className="text-xs font-semibold text-gray-600">NEW</div>
-          <div className="text-2xl font-bold text-yellow-600">
-            {inbox.stats.NEW}
-          </div>
-        </div>
-        <div className="bg-white rounded p-3 border-l-4 border-blue-400">
-          <div className="text-xs font-semibold text-gray-600">REVIEWED</div>
-          <div className="text-2xl font-bold text-blue-600">
-            {inbox.stats.REVIEWED}
-          </div>
-        </div>
-        <div className="bg-white rounded p-3 border-l-4 border-green-400">
-          <div className="text-xs font-semibold text-gray-600">MERGED</div>
-          <div className="text-2xl font-bold text-green-600">
-            {inbox.stats.MERGED}
-          </div>
-        </div>
-      </div>
-
-      {/* Token Usage */}
-      <div className="bg-white rounded p-3 space-y-2">
-        <div className="flex justify-between items-center">
-          <span className="text-sm font-semibold">Token Budget</span>
-          <span className="text-sm font-mono">
-            {tokens.estimated} / {tokens.budget}
-          </span>
-        </div>
-        <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
-          <div
-            className={`h-full transition-all ${
-              isCritical
-                ? "bg-red-500"
-                : isWarning
-                  ? "bg-yellow-500"
-                  : "bg-green-500"
-            }`}
-            style={{ width: `${Math.min(tokenPercentUsed, 100)}%` }}
-          />
-        </div>
-        <div className="flex justify-between text-xs text-gray-600">
-          <span>{tokenPercentUsed}% used</span>
-          <span>Recommended: &lt;75%</span>
-        </div>
-      </div>
-
-      {/* Recommendation */}
-      <div
-        className={`rounded p-3 text-sm ${
-          isCritical
-            ? "bg-red-100 text-red-700"
-            : isWarning
-              ? "bg-yellow-100 text-yellow-700"
-              : "bg-green-100 text-green-700"
-        }`}
-      >
-        {isCritical ? "🚨" : isWarning ? "⚠️" : "✅"} {recommendation}
-      </div>
-
-      {/* Actions */}
-      {inbox.pending > 0 && (
-        <div className="space-y-2 max-h-48 overflow-y-auto">
-          <p className="text-sm font-semibold">Pending Entries:</p>
-          {inbox.pendingEntries.slice(0, 5).map((entryId) => (
-            <div
-              key={entryId}
-              className="flex items-center justify-between bg-white rounded p-2 text-xs"
-            >
-              <code className="text-gray-600">{entryId}</code>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => mergeInboxEntry(entryId, "decisions")}
-                  className="px-2 py-1 text-white bg-purple-500 rounded hover:bg-purple-600"
-                >
-                  Decisions
-                </button>
-                <button
-                  onClick={() => mergeInboxEntry(entryId, "patterns")}
-                  className="px-2 py-1 text-white bg-purple-500 rounded hover:bg-purple-600"
-                >
-                  Patterns
-                </button>
-              </div>
-            </div>
-          ))}
-          {inbox.pending > 5 && (
-            <p className="text-xs text-gray-500 font-semibold">
-              +{inbox.pending - 5} more entries (see .memory/inbox.md)
-            </p>
+    <div className="glass-card" data-testid="memory-status-widget">
+      <div className="glass-card-head">
+        <h2 data-testid="memory-status-heading">🧠 Global HAM Memory Status</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {lastRefresh && (
+            <span className="header-meta">Checked: {lastRefresh}</span>
           )}
+          <button
+            onClick={fetchStatus}
+            disabled={loading}
+            className="btn btn-secondary"
+          >
+            {loading ? "..." : "Refresh"}
+          </button>
         </div>
-      )}
-
-      {/* Manual Commands */}
-      <div className="bg-white rounded p-3 text-xs space-y-1 border border-gray-200">
-        <p className="font-semibold text-gray-700">Manual Commands:</p>
-        <code className="block text-gray-600 pl-2">
-          npm run memory:status
-        </code>
-        <code className="block text-gray-600 pl-2">
-          npm run memory:merge &lt;id&gt; &lt;decisions|patterns&gt;
-        </code>
-        <code className="block text-gray-600 pl-2">
-          npm run memory:help
-        </code>
       </div>
 
-      {/* Links */}
-      <div className="space-y-1 text-xs">
-        <a
-          href="/.memory/inbox.md"
-          target="_blank"
-          className="block text-blue-600 hover:underline"
-        >
-          📋 View Inbox
-        </a>
-        <a
-          href="/.memory/decisions.md"
-          target="_blank"
-          className="block text-blue-600 hover:underline"
-        >
-          📌 View Decisions
-        </a>
-        <a
-          href="/.memory/audit-log.md"
-          target="_blank"
-          className="block text-blue-600 hover:underline"
-        >
-          📜 View Audit Log
-        </a>
+      <div className="round-list" style={{ marginTop: 0 }}>
+        {/* Inbox Stats */}
+        <div className="round-row" style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, padding: 10, background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: '3px solid var(--accent-amber)' }}>
+            <div className="control-label">NEW</div>
+            <div style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--accent-amber)' }}>
+              {inbox.stats.NEW}
+            </div>
+          </div>
+          <div style={{ flex: 1, padding: 10, background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: '3px solid var(--accent-cyan)' }}>
+            <div className="control-label">REVIEWED</div>
+            <div style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--accent-cyan)' }}>
+              {inbox.stats.REVIEWED}
+            </div>
+          </div>
+          <div style={{ flex: 1, padding: 10, background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: '3px solid var(--accent-emerald)' }}>
+            <div className="control-label">MERGED</div>
+            <div style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--accent-emerald)' }}>
+              {inbox.stats.MERGED}
+            </div>
+          </div>
+        </div>
+
+        {/* Token Usage */}
+        <div className="round-row" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span className="round-head" style={{ margin: 0 }}><strong>Token Budget</strong></span>
+            <span className="header-meta">
+              {tokens.estimated} / {tokens.budget}
+            </span>
+          </div>
+          <div style={{ width: '100%', background: 'rgba(255,255,255,0.1)', borderRadius: 999, height: 6, overflow: 'hidden' }}>
+            <div
+              style={{
+                height: '100%',
+                background: isCritical ? 'var(--status-failed)' : isWarning ? 'var(--status-thinking)' : 'var(--status-completed)',
+                width: `${Math.min(tokenPercentUsed, 100)}%`,
+                transition: 'width 0.3s ease'
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+            <span>{tokenPercentUsed}% used</span>
+            <span>Recommended: &lt;75%</span>
+          </div>
+        </div>
+
+        {/* Recommendation */}
+        <div className={isCritical ? "error-banner" : "round-row"} style={!isCritical ? { background: isWarning ? 'rgba(245, 158, 11, 0.12)' : 'rgba(16, 185, 129, 0.1)' } : {}}>
+          <p style={{ margin: 0, fontSize: '0.82rem', color: isCritical ? 'var(--accent-rose)' : isWarning ? 'var(--accent-amber)' : 'var(--accent-emerald)' }}>
+            {isCritical ? "🚨" : isWarning ? "⚠️" : "✅"} {recommendation}
+          </p>
+        </div>
+
+        {/* Actions */}
+        {inbox.pending > 0 && (
+          <div className="round-row" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className="round-head" style={{ margin: 0 }}><strong>Pending Entries</strong></div>
+            <div style={{ maxHeight: 180, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {inbox.pendingEntries.slice(0, 5).map((entryId) => (
+                <div
+                  key={entryId}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.03)', padding: '6px 10px', borderRadius: 6 }}
+                >
+                  <code className="header-meta">{entryId}</code>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      onClick={() => mergeInboxEntry(entryId, "decisions")}
+                      className="badge info" style={{ border: 'none', cursor: 'pointer' }}
+                    >
+                      Decisions
+                    </button>
+                    <button
+                      onClick={() => mergeInboxEntry(entryId, "patterns")}
+                      className="badge info" style={{ border: 'none', cursor: 'pointer' }}
+                    >
+                      Patterns
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {inbox.pending > 5 && (
+                <p className="empty-text">
+                  +{inbox.pending - 5} more entries (see .memory/inbox.md)
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Manual Commands & Links */}
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div className="round-row" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div className="control-label">Manual Commands</div>
+            <code className="empty-text" style={{ fontSize: '0.7rem' }}>npm run memory:status</code>
+            <code className="empty-text" style={{ fontSize: '0.7rem' }}>npm run memory:merge &lt;id&gt;...</code>
+            <code className="empty-text" style={{ fontSize: '0.7rem' }}>npm run memory:help</code>
+          </div>
+          <div className="round-row" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div className="control-label">Links</div>
+            <a href="/.memory/inbox.md" target="_blank" className="badge ok" style={{ textDecoration: 'none', display: 'inline-block', width: 'fit-content' }}>
+              📋 View Inbox
+            </a>
+            <a href="/.memory/decisions.md" target="_blank" className="badge warn" style={{ textDecoration: 'none', display: 'inline-block', width: 'fit-content' }}>
+              📌 View Decisions
+            </a>
+            <a href="/.memory/audit-log.md" target="_blank" className="badge info" style={{ textDecoration: 'none', display: 'inline-block', width: 'fit-content' }}>
+              📜 View Audit Log
+            </a>
+          </div>
+        </div>
       </div>
     </div>
   );

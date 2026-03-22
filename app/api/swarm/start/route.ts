@@ -12,6 +12,7 @@ interface StartPayload {
   workspace?: string;
   mode?: RunMode;
   features?: Partial<SwarmFeatures>;
+  prompt?: string;
 }
 
 export async function POST(request: Request) {
@@ -61,6 +62,7 @@ export async function POST(request: Request) {
       workspace: payload.workspace,
       mode: payload.mode,
       features: payload.features,
+      prompt: payload.prompt,
     });
     return NextResponse.json({
       ok: true,

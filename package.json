@@ -45,10 +45,12 @@
     "@modelcontextprotocol/sdk": "^1.27.1",
     "ajv": "^8.17.1",
     "dotenv": "^16.4.5",
+    "lucide-react": "^0.577.0",
     "next": "^16.1.6",
     "openai": "^4.68.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
     "yaml": "^2.8.2",
     "zod": "^3.25.76"
   },

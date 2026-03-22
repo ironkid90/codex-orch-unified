@@ -17,6 +17,7 @@ export interface StartOptions {
   workspace?: string;
   mode?: RunMode;
   features?: Partial<SwarmFeatures>;
+  prompt?: string;
 }
 
 export interface StartResult {
