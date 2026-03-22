@@ -2,8 +2,6 @@
     "git.enabled":  true,
     "editor.largeFileOptimizations":  true,
     "files.exclude": {
-        "**/.git": false,
-        "**/.vscode": false,
         "**/.memory": false
     },
     "files.watcherExclude":  {
