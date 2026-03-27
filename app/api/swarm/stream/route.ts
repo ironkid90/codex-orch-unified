@@ -14,7 +14,10 @@ export async function GET(request: Request) {
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      let closed = false;
+
       const push = (event: string, payload: unknown) => {
+        if (closed) return;
         controller.enqueue(encoder.encode(toSse(event, payload)));
       };
 
@@ -23,6 +26,8 @@ export async function GET(request: Request) {
       let lastSerializedTokens = "";
 
       const pushLatestState = () => {
+        if (closed) return;
+
         const nextState = swarmStore.getState();
         const serialized = JSON.stringify(nextState);
         if (serialized !== lastSerializedState) {
@@ -33,13 +38,15 @@ export async function GET(request: Request) {
         // Push graph execution state if a run is active
         if (nextState.runId) {
           graphStore.getExecutionState(nextState.runId).then((graphState) => {
-            if (!graphState) return;
+            if (closed || !graphState) return;
             const graphSerialized = JSON.stringify(graphState);
             if (graphSerialized !== lastSerializedGraphState) {
               lastSerializedGraphState = graphSerialized;
               push("graph_state", graphState);
             }
-          }).catch(() => { /* ignore */ });
+          }).catch((err) => {
+            if (!closed) console.warn("[SSE] graph state push failed:", err);
+          });
         }
 
         // Push token tracker snapshot
@@ -74,6 +81,7 @@ export async function GET(request: Request) {
       request.signal.addEventListener(
         "abort",
         () => {
+          closed = true;
           clearInterval(poll);
           clearInterval(keepAlive);
           unsubscribe();

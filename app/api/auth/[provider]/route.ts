@@ -11,6 +11,8 @@ const VALID_PROVIDERS = new Set<string>([
   "gemini",
   "ollama",
   "antigravity",
+  "openai-compatible",
+  "azure-openai",
 ]);
 
 function isValidProvider(provider: string): provider is ProviderType {
@@ -30,16 +32,16 @@ export async function GET(
     const { provider } = await params;
     const all = request.nextUrl.searchParams.get("all") === "true";
 
-    if (all) {
-      const statuses = await providerAuthManager.getAllProviderStatuses();
-      return NextResponse.json({ providers: statuses });
-    }
-
     if (!isValidProvider(provider)) {
       return NextResponse.json(
         { error: `Unknown provider: "${provider}". Valid: ${[...VALID_PROVIDERS].join(", ")}` },
         { status: 400 },
       );
+    }
+
+    if (all) {
+      const statuses = await providerAuthManager.getAllProviderStatuses();
+      return NextResponse.json({ providers: statuses });
     }
 
     const status = await providerAuthManager.getProviderStatus(provider);

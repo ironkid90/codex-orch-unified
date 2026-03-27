@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   try {
     const runId = request.nextUrl.searchParams.get("runId");
-    const limit = Number(request.nextUrl.searchParams.get("limit") ?? "20");
+    const limit = Math.min(Math.max(parseInt(request.nextUrl.searchParams.get("limit") ?? "20", 10) || 20, 1), 100);
 
     if (runId) {
       const state = await graphStore.getExecutionState(runId);

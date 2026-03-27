@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
   try {
     const runId = request.nextUrl.searchParams.get("runId");
     const analytics = request.nextUrl.searchParams.get("analytics") === "true";
-    const limit = Number(request.nextUrl.searchParams.get("limit") ?? "50");
+    const limit = Math.min(Math.max(parseInt(request.nextUrl.searchParams.get("limit") ?? "50", 10) || 50, 1), 100);
 
     if (runId) {
       const entry = await fileRunHistoryStore.getById(runId);
