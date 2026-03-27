@@ -19,11 +19,21 @@ Collection: `workspace` — holds embeddings of every source file.
 
 ```python
 # Python (foundry_agents/qdrant_tool.py)
-from foundry_agents.qdrant_tool import QdrantTool
-tool = QdrantTool()          # connects to localhost:6333
-results = tool.search("your query here", limit=5)
+from foundry_agents.qdrant_tool import list_collections, scroll, search
+
+print(list_collections())
+
+# Payload filter lookup (no embedding required)
+hits = scroll(filter_key="file_path", filter_value="lib/swarm/engine.ts", limit=5)
+for r in hits:
+    print(r["file_path"])
+
+# Semantic search requires a precomputed embedding vector that matches
+# config/qdrant.json (all-MiniLM-L6-v2, 384 dims)
+vector = [0.0] * 384
+results = search(query_vector=vector, limit=5)
 for r in results:
-    print(r["payload"]["file_path"], r["score"])
+    print(r["file_path"], r["score"])
 ```
 
 Or call the TypeScript tool: `lib/tools/qdrant-search.ts` (`qdrantSearchTool`).

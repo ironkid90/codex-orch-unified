@@ -1,4 +1,6 @@
 import { swarmStore } from "@/lib/swarm/store";
+import { graphStore } from "@/lib/swarm/graph-store";
+import { getTokenTracker } from "@/lib/swarm/engine";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,14 +19,42 @@ export async function GET(request: Request) {
       };
 
       let lastSerializedState = "";
+      let lastSerializedGraphState = "";
+      let lastSerializedTokens = "";
+
       const pushLatestState = () => {
         const nextState = swarmStore.getState();
         const serialized = JSON.stringify(nextState);
-        if (serialized === lastSerializedState) {
-          return;
+        if (serialized !== lastSerializedState) {
+          lastSerializedState = serialized;
+          push("state", nextState);
         }
-        lastSerializedState = serialized;
-        push("state", nextState);
+
+        // Push graph execution state if a run is active
+        if (nextState.runId) {
+          graphStore.getExecutionState(nextState.runId).then((graphState) => {
+            if (!graphState) return;
+            const graphSerialized = JSON.stringify(graphState);
+            if (graphSerialized !== lastSerializedGraphState) {
+              lastSerializedGraphState = graphSerialized;
+              push("graph_state", graphState);
+            }
+          }).catch(() => { /* ignore */ });
+        }
+
+        // Push token tracker snapshot
+        try {
+          const tracker = getTokenTracker();
+          const tokenSnapshot = {
+            aggregate: tracker.getAggregateTotals(),
+            sessionCount: tracker.getAllSessionTotals().length,
+          };
+          const tokenSerialized = JSON.stringify(tokenSnapshot);
+          if (tokenSerialized !== lastSerializedTokens) {
+            lastSerializedTokens = tokenSerialized;
+            push("tokens", tokenSnapshot);
+          }
+        } catch { /* ignore if engine not loaded */ }
       };
 
       pushLatestState();

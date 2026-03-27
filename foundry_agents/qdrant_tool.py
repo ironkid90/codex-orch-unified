@@ -17,7 +17,7 @@ from typing import Any
 
 try:
     from qdrant_client import QdrantClient
-    from qdrant_client.models import Filter, FieldCondition, MatchValue, SearchRequest
+    from qdrant_client.models import Filter, FieldCondition, MatchValue
     _HAS_QDRANT = True
 except ImportError:
     _HAS_QDRANT = False
@@ -69,13 +69,23 @@ def search(
             must=[FieldCondition(key=filter_key, match=MatchValue(value=filter_value))]
         )
 
-    hits = c.search(
-        collection_name=collection,
-        query_vector=query_vector,
-        query_filter=query_filter,
-        limit=limit,
-        with_payload=True,
-    )
+    if hasattr(c, "query_points"):
+        response = c.query_points(
+            collection_name=collection,
+            query=query_vector,
+            query_filter=query_filter,
+            limit=limit,
+            with_payload=True,
+        )
+        hits = response.points
+    else:
+        hits = c.search(
+            collection_name=collection,
+            query_vector=query_vector,
+            query_filter=query_filter,
+            limit=limit,
+            with_payload=True,
+        )
 
     return [
         {

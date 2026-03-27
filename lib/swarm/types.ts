@@ -89,6 +89,14 @@ export type SwarmEventType =
   | "workspace.diff"
   // IO Coordinator
   | "io.updated"
+  // Graph execution
+  | "graph.state_changed"
+  | "graph.node_started"
+  | "graph.node_completed"
+  | "graph.node_failed"
+  // Auth
+  | "auth.provider_refreshed"
+  | "auth.token_stored"
   // Allow future extension without breaking existing code
   | (string & {});
 

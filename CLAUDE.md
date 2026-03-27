@@ -135,7 +135,7 @@ A local Qdrant vector database runs at **`http://localhost:6333`** (Docker). Col
 **Before editing any file, search Qdrant first:**
 
 - TypeScript: `qdrantSearchTool` — registered in `lib/tools/index.ts`, implemented in `lib/tools/qdrant-search.ts`
-- Python: `from foundry_agents.qdrant_tool import QdrantTool; QdrantTool().search("query")`
+- Python: `from foundry_agents.qdrant_tool import list_collections, scroll, search` (note: `search(...)` requires a precomputed embedding vector; use `scroll(...)` for file-path or payload lookups)
 - Re-index: `python scripts/qdrant_ingest.py --dir . --recreate`
 
 Skill spec: `skills/qdrant-vector-search/SKILL.md`

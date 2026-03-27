@@ -29,6 +29,7 @@ import { McpClientManager, createMcpToolWrappers } from "./mcp-client";
 import { GraphExecutor } from "./graph-executor";
 import { createDefaultSwarmGraph } from "./graph-dsl";
 import type { WorkflowGraph } from "./graph-types";
+import { graphStore } from "./graph-store";
 
 import {
   compressForContext,
@@ -97,6 +98,7 @@ const HEARTBEAT_INTERVAL_MS =
   parseInt(process.env.SWARM_HEARTBEAT_INTERVAL_MS ?? "3000", 10) || 3_000;
 /** Tracks token usage per agent session across the lifetime of a run. */
 const tokenTracker = new TokenTracker();
+export function getTokenTracker(): TokenTracker { return tokenTracker; }
 /** Module-level workspace manager (validates paths inside PROJECT_ROOT). */
 const _workspaceManager = new WorkspaceManager({ root: PROJECT_ROOT });
 
@@ -2600,7 +2602,7 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
   const features = swarmStore.getState().features;
 
   const graph: WorkflowGraph = createDefaultSwarmGraph();
-  
+
   // Conditionally disable planner/research based on features
   if (!features.researchAgent) {
     graph.entryNodeId = "worker1";
@@ -2616,7 +2618,14 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
   let worker2Skipped = false;
   let roundTokenBaseline: TokenUsage;
 
+  const currentRunId = swarmStore.getState().runId;
+
   const executor = new GraphExecutor(graph, {
+    onStateChange: (graphExecState) => {
+      if (currentRunId) {
+        graphStore.saveExecutionState(currentRunId, graphExecState).catch(() => { /* ignore */ });
+      }
+    },
     onRoundStart: async (round) => {
       await processQueuedControlRequests(round);
       const fsStore = swarmStore.getState().features;
@@ -2810,16 +2819,16 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
         const coordinator = fsStore.ensembleVoting
           ? await runCoordinatorEnsemble(round, opts.workspace, opts.mode, roundDir, coordinatorPrompt, roleExecutions.coordinator)
           : await runAgentTask({
-              agentId: "coordinator",
-              round,
-              prompt: coordinatorPrompt,
-              outFile: path.join(roundDir, "coordinator.md"),
-              workspace: opts.workspace,
-              mode: opts.mode,
-              roundDir,
-              target: "broadcast",
-              execution: roleExecutions.coordinator,
-            });
+            agentId: "coordinator",
+            round,
+            prompt: coordinatorPrompt,
+            outFile: path.join(roundDir, "coordinator.md"),
+            workspace: opts.workspace,
+            mode: opts.mode,
+            roundDir,
+            target: "broadcast",
+            execution: roleExecutions.coordinator,
+          });
         return { nodeId: node.id, status: "completed", retryCount: 0, output: coordinator };
       }
 
@@ -2833,81 +2842,81 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
 
       prevFeedback = evaluator?.text || "";
 
-    const coordStatus = parseCoordinatorStatus(coordinator?.text || "");
-    const worker2Decision = parseWorker2Decision(worker2?.text || "") || (worker2Skipped ? "SKIPPED_NO_CHANGES" : undefined);
-    const evalStatus = parseEvaluatorStatus(evaluator?.text || "");
-    const finalStatus = deriveRoundStatus(coordStatus, worker2Decision, evalStatus, lint.passed);
+      const coordStatus = parseCoordinatorStatus(coordinator?.text || "");
+      const worker2Decision = parseWorker2Decision(worker2?.text || "") || (worker2Skipped ? "SKIPPED_NO_CHANGES" : undefined);
+      const evalStatus = parseEvaluatorStatus(evaluator?.text || "");
+      const finalStatus = deriveRoundStatus(coordStatus, worker2Decision, evalStatus, lint.passed);
 
-    const notes: string[] = [];
-    if (worker2Decision) notes.push(`Worker-2 decision: ${worker2Decision}`);
-    if (evalStatus) notes.push(`Evaluator status: ${evalStatus}`);
-    notes.push(`Lint: ${lint.passed ? "PASS" : `FAIL (${lint.exitCode})`}`);
-    notes.push(
-      changedFiles.length === 0
-        ? "Heuristic selector: no tracked file changes."
-        : `Tracked changed files: ${changedFiles.slice(0, 6).join(", ")}`,
-    );
-    notes.push(...parseRisks(coordinator?.text || ""));
-    let roundTokenTotals = subtractTokenUsage(tokenTracker.getAggregateTotals(), roundTokenBaseline);
-    if (!roundTokenTotals) roundTokenTotals = createTokenUsage();
-    notes.push(`Tokens: ${formatTokenUsage(roundTokenTotals)}`);
+      const notes: string[] = [];
+      if (worker2Decision) notes.push(`Worker-2 decision: ${worker2Decision}`);
+      if (evalStatus) notes.push(`Evaluator status: ${evalStatus}`);
+      notes.push(`Lint: ${lint.passed ? "PASS" : `FAIL (${lint.exitCode})`}`);
+      notes.push(
+        changedFiles.length === 0
+          ? "Heuristic selector: no tracked file changes."
+          : `Tracked changed files: ${changedFiles.slice(0, 6).join(", ")}`,
+      );
+      notes.push(...parseRisks(coordinator?.text || ""));
+      let roundTokenTotals = subtractTokenUsage(tokenTracker.getAggregateTotals(), roundTokenBaseline);
+      if (!roundTokenTotals) roundTokenTotals = createTokenUsage();
+      notes.push(`Tokens: ${formatTokenUsage(roundTokenTotals)}`);
 
-    swarmStore.upsertRound({
-      round,
-      status: finalStatus,
-      worker2Decision,
-      evaluatorStatus: evalStatus,
-      coordinatorStatus: coordStatus,
-      lintPassed: lint.passed,
-      auditorSkipped: worker2Skipped,
-      changedFiles: changedFiles.slice(0, 20),
-      tokenTotals: roundTokenTotals,
-      notes,
-    });
-
-    swarmStore.appendEvent({
-      type: "round.finished",
-      round,
-      message: `Round ${round} finished with ${finalStatus}.`,
-      metadata: { worker2Decision, evalStatus, coordStatus, lintPassed: lint.passed, roundTokenTotals, aggregateTokenTotals: tokenTracker.getAggregateTotals() },
-    });
-
-    carryW1Directives = mergeDirectiveLists(carryW1Directives, parseStructuredSection(evaluator?.text || "", "PROMPT_UPDATES_W1"), 10);
-    carryW2Directives = mergeDirectiveLists(carryW2Directives, parseStructuredSection(evaluator?.text || "", "PROMPT_UPDATES_W2"), 10);
-    carryCoordinatorRules = mergeDirectiveLists(carryCoordinatorRules, parseStructuredSection(evaluator?.text || "", "COORDINATION_RULES"), 10);
-    carryNextActions = mergeDirectiveLists(carryNextActions, parseStructuredSection(coordinator?.text || "", "NEXT_ACTIONS"), 12);
-    const selectedVariant = isEnsembleTaskResult(coordinator) ? coordinator.selectedVariant : "single";
-    prevCoordinatorContext = { round, status: finalStatus, variant: selectedVariant };
-
-    const defects = parseDefectSeverities(worker2?.text || "");
-    const shouldRewind = fsStore.checkpointing && round > 1 && (coordStatus === "FAIL" || (!lint.passed && (defects.high > 0 || defects.med > 0)));
-    
-    if (shouldRewind) {
-      const targetRound = round - 1;
-      const restored = await restoreCheckpoint(targetRound, opts.workspace);
-      swarmStore.appendEvent({
-        type: "run.rewind",
+      swarmStore.upsertRound({
         round,
-        level: "warn",
-        message: `Auto-rewind to checkpoint round ${targetRound}.`,
-        metadata: { targetRound, restoredCount: restored },
+        status: finalStatus,
+        worker2Decision,
+        evaluatorStatus: evalStatus,
+        coordinatorStatus: coordStatus,
+        lintPassed: lint.passed,
+        auditorSkipped: worker2Skipped,
+        changedFiles: changedFiles.slice(0, 20),
+        tokenTotals: roundTokenTotals,
+        notes,
       });
-      if (fsStore.humanInLoop || fsStore.checkpointing) {
-        swarmStore.setPaused(true, `Auto-paused after rewind to round ${targetRound}.`);
-        await waitIfPaused(round, "post_rewind_review");
-      }
-    }
 
-    if (finalStatus === "PASS") {
-      swarmStore.finishRun("Coordinator, evaluator, and auditor reached PASS.");
-      return false; // Exit loop
-    }
-    return true; // continue next round
+      swarmStore.appendEvent({
+        type: "round.finished",
+        round,
+        message: `Round ${round} finished with ${finalStatus}.`,
+        metadata: { worker2Decision, evalStatus, coordStatus, lintPassed: lint.passed, roundTokenTotals, aggregateTokenTotals: tokenTracker.getAggregateTotals() },
+      });
+
+      carryW1Directives = mergeDirectiveLists(carryW1Directives, parseStructuredSection(evaluator?.text || "", "PROMPT_UPDATES_W1"), 10);
+      carryW2Directives = mergeDirectiveLists(carryW2Directives, parseStructuredSection(evaluator?.text || "", "PROMPT_UPDATES_W2"), 10);
+      carryCoordinatorRules = mergeDirectiveLists(carryCoordinatorRules, parseStructuredSection(evaluator?.text || "", "COORDINATION_RULES"), 10);
+      carryNextActions = mergeDirectiveLists(carryNextActions, parseStructuredSection(coordinator?.text || "", "NEXT_ACTIONS"), 12);
+      const selectedVariant = isEnsembleTaskResult(coordinator) ? coordinator.selectedVariant : "single";
+      prevCoordinatorContext = { round, status: finalStatus, variant: selectedVariant };
+
+      const defects = parseDefectSeverities(worker2?.text || "");
+      const shouldRewind = fsStore.checkpointing && round > 1 && (coordStatus === "FAIL" || (!lint.passed && (defects.high > 0 || defects.med > 0)));
+
+      if (shouldRewind) {
+        const targetRound = round - 1;
+        const restored = await restoreCheckpoint(targetRound, opts.workspace);
+        swarmStore.appendEvent({
+          type: "run.rewind",
+          round,
+          level: "warn",
+          message: `Auto-rewind to checkpoint round ${targetRound}.`,
+          metadata: { targetRound, restoredCount: restored },
+        });
+        if (fsStore.humanInLoop || fsStore.checkpointing) {
+          swarmStore.setPaused(true, `Auto-paused after rewind to round ${targetRound}.`);
+          await waitIfPaused(round, "post_rewind_review");
+        }
+      }
+
+      if (finalStatus === "PASS") {
+        swarmStore.finishRun("Coordinator, evaluator, and auditor reached PASS.");
+        return false; // Exit loop
+      }
+      return true; // continue next round
     }
   });
 
   await executor.execute(opts.workspace, opts.maxRounds);
-  
+
   const sStore = swarmStore.getState();
   if (sStore.running) {
     swarmStore.finishRun("Reached max rounds; revisions still required.");

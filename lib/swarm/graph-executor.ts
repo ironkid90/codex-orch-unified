@@ -91,8 +91,8 @@ export class GraphExecutor {
       nodeResults: { ...state.nodeResults, [nodeId]: result },
       currentNodeIds: state.currentNodeIds.filter((id) => id !== nodeId),
       completedNodeIds: result.status === "completed" ? [...state.completedNodeIds, nodeId] : state.completedNodeIds,
-      failedNodeIds:    result.status === "failed"    ? [...state.failedNodeIds,    nodeId] : state.failedNodeIds,
-      skippedNodeIds:   result.status === "skipped"   ? [...(state.skippedNodeIds ?? []),   nodeId] : state.skippedNodeIds,
+      failedNodeIds: result.status === "failed" ? [...state.failedNodeIds, nodeId] : state.failedNodeIds,
+      skippedNodeIds: result.status === "skipped" ? [...(state.skippedNodeIds ?? []), nodeId] : state.skippedNodeIds,
     };
     const toQueue: string[] = [];
     for (const candidate of this.getNextNodes(next, nodeId)) {
@@ -150,6 +150,12 @@ export class GraphExecutor {
     const runId = "run-" + Date.now();
     let accumulatedContext: Record<string, any> = {};
 
+    const notifyStateChange = (state: GraphExecutionState) => {
+      if (this.config?.onStateChange) {
+        try { this.config.onStateChange(state); } catch { /* ignore */ }
+      }
+    };
+
     for (let round = 1; round <= maxRounds; round++) {
       if (this.config?.onRoundStart) {
         await this.config.onRoundStart(round);
@@ -157,17 +163,18 @@ export class GraphExecutor {
 
       let state = this.createInitialState(runId);
       state.context = accumulatedContext;
+      notifyStateChange(state);
 
       while (state.currentNodeIds.length > 0 && !this.isComplete(state)) {
         const promises = state.currentNodeIds.map(async (nodeId) => {
           const node = this.getNode(nodeId);
           if (!node) return { nodeId, status: "failed" as const, error: "Node not found" };
-          
+
           if (node.type === "merge") {
-             return { nodeId, status: "completed" as const, round, output: undefined };
+            return { nodeId, status: "completed" as const, round, output: undefined };
           }
           if (this.config?.executeNode) {
-             return await this.config.executeNode(node, state.context || {}, round);
+            return await this.config.executeNode(node, state.context || {}, round);
           }
           return { nodeId, status: "completed" as const, round };
         });
@@ -177,9 +184,10 @@ export class GraphExecutor {
         for (const res of results) {
           if (res.status === "completed" && res.output !== undefined) {
             state.context = state.context || {};
-            state.context[res.nodeId] = res.output; // Dependency state mapped perfectly to LangGraph's state
+            state.context[res.nodeId] = res.output;
           }
           state = this.advanceState(state, res.nodeId, res as NodeExecutionResult);
+          notifyStateChange(state);
           if (this.config?.onNodeComplete) {
             await this.config.onNodeComplete(res.nodeId, res as NodeExecutionResult, round);
           }
@@ -201,4 +209,5 @@ export interface GraphRunConfig {
   onNodeComplete?: (nodeId: string, result: NodeExecutionResult, round: number) => Promise<void>;
   onRoundStart?: (round: number) => Promise<void>;
   onRoundEnd?: (round: number, context: Record<string, any>) => Promise<boolean>;
+  onStateChange?: (state: GraphExecutionState) => void;
 }
