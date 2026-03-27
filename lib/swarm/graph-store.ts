@@ -15,12 +15,20 @@ async function ensureGraphDirs(): Promise<void> {
   await mkdir(GRAPH_STATE_DIR, { recursive: true });
 }
 
+function safePath(baseDir: string, name: string): string {
+  const resolved = path.resolve(baseDir, `${name}.json`);
+  if (!resolved.startsWith(baseDir + path.sep) && resolved !== baseDir) {
+    throw new Error(`Invalid identifier: path traversal detected in "${name}"`);
+  }
+  return resolved;
+}
+
 function graphFilePath(graphId: string): string {
-  return path.join(GRAPHS_DIR, `${graphId}.json`);
+  return safePath(GRAPHS_DIR, graphId);
 }
 
 function graphStateFilePath(runId: string): string {
-  return path.join(GRAPH_STATE_DIR, `${runId}.json`);
+  return safePath(GRAPH_STATE_DIR, runId);
 }
 
 export interface GraphStoreEntry {
@@ -140,7 +148,7 @@ export const graphStore: GraphStore = {
 
   async listExecutionStates(limit = 20) {
     await ensureGraphDirs();
-    const files = (await readdir(GRAPH_STATE_DIR)).filter((f) => f.endsWith(".json"));
+    const files = (await readdir(GRAPH_STATE_DIR)).filter((f) => f.endsWith(".json")).sort();
     const results: Array<{ runId: string; state: GraphExecutionState }> = [];
     for (const file of files.slice(-limit)) {
       try {

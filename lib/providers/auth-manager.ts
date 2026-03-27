@@ -89,7 +89,7 @@ export class ProviderAuthManager {
           const auth = await resolveOpenAIAuth();
           entry = {
             provider: "openai",
-            token: auth.bearerToken,
+            token: auth.bearerToken ? `${auth.bearerToken.slice(0, 8)}...` : undefined,
             apiKey: auth.apiKey ? `${auth.apiKey.slice(0, 8)}...` : undefined,
             source: auth.source,
             updatedAt: now,
