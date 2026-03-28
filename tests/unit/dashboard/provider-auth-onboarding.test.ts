@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   buildProviderInventoryViewModel,
   createProviderTokenSavePayload,
 } from "../../../app/hooks/useProviderAuthInventory";
+import { ProviderStatusInventory } from "../../../app/components/dashboard/settings/ProviderStatusInventory";
 
 test("buildProviderInventoryViewModel surfaces OpenAI ChatGPT/Codex and gateway-aware onboarding guidance", () => {
   const inventory = buildProviderInventoryViewModel({
@@ -93,4 +96,60 @@ test("createProviderTokenSavePayload supports session-only and env persistence w
       writeToEnv: true,
     },
   );
+});
+
+test("ProviderStatusInventory renders provider setup visibility and external-login guidance", () => {
+  const inventory = buildProviderInventoryViewModel({
+    providers: {
+      openai: {
+        provider: "openai",
+        status: "active",
+        source: "~/.codex/auth.json",
+        updatedAt: "2026-03-28T05:00:00.000Z",
+        metadata: {
+          mode: "chatgpt_oauth",
+          availableModes: ["api_key", "bearer_token", "chatgpt_oauth", "codex_oauth"],
+          supportsGateway: true,
+        },
+      },
+      gemini: {
+        provider: "gemini",
+        status: "active",
+        source: "Application Default Credentials",
+        updatedAt: "2026-03-28T05:00:00.000Z",
+        metadata: {
+          useAdc: true,
+          availableModes: ["api_key", "oauth_token", "adc", "vertex"],
+        },
+      },
+      anthropic: {
+        provider: "anthropic",
+        status: "unconfigured",
+        source: "unconfigured",
+        updatedAt: "2026-03-28T05:00:00.000Z",
+        metadata: {
+          availableModes: ["api_key"],
+        },
+      },
+    },
+  });
+
+  const html = renderToStaticMarkup(
+    React.createElement(ProviderStatusInventory, {
+      inventory,
+      status: "ready",
+      error: null,
+    }),
+  );
+
+  assert.match(html, /OpenAI/);
+  assert.match(html, /ChatGPT\/Codex/i);
+  assert.match(html, /codex login/i);
+  assert.match(html, /Google \/ Gemini/);
+  assert.match(html, /Application Default Credentials/i);
+  assert.match(html, /gcloud auth application-default login/i);
+  assert.match(html, /Anthropic/);
+  assert.match(html, /API key only/i);
+  assert.match(html, /Save to env/i);
+  assert.match(html, /Session only/i);
 });
