@@ -19,6 +19,16 @@ export interface ProviderTokenEntry {
   updatedAt: string;
   status: "active" | "expired" | "error" | "unconfigured";
   error?: string;
+  metadata?: {
+    mode?: string;
+    baseUrl?: string;
+    availableModes?: string[];
+    supportsGateway?: boolean;
+    useAdc?: boolean;
+    useVertexAi?: boolean;
+    vertexProject?: string;
+    vertexLocation?: string;
+  };
 }
 
 export interface AuthStateSnapshot {
@@ -94,6 +104,12 @@ export class ProviderAuthManager {
             source: auth.source,
             updatedAt: now,
             status: auth.apiKey || auth.bearerToken ? "active" : "unconfigured",
+            metadata: {
+              mode: auth.mode,
+              baseUrl: auth.baseUrl,
+              availableModes: ["auto", "api_key", "bearer_token", "chatgpt_oauth", "codex_oauth"],
+              supportsGateway: auth.baseUrl.includes("ai-gateway.vercel.sh"),
+            },
           };
           break;
         }
@@ -112,6 +128,14 @@ export class ProviderAuthManager {
                   : "unconfigured",
             updatedAt: now,
             status: auth.apiKey || auth.oauthToken || auth.useAdc ? "active" : "unconfigured",
+            metadata: {
+              baseUrl: auth.baseUrl,
+              availableModes: ["api_key", "oauth_token", "adc", "vertex"],
+              useAdc: auth.useAdc,
+              useVertexAi: auth.useVertexAi,
+              vertexProject: auth.vertexProject,
+              vertexLocation: auth.vertexLocation,
+            },
           };
           break;
         }
@@ -123,6 +147,9 @@ export class ProviderAuthManager {
             source: apiKey ? "ANTHROPIC_API_KEY" : "unconfigured",
             updatedAt: now,
             status: apiKey ? "active" : "unconfigured",
+            metadata: {
+              availableModes: ["api_key"],
+            },
           };
           break;
         }

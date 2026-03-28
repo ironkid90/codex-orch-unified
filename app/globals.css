@@ -811,6 +811,117 @@ body {
   padding-left: 10px;
 }
 
+.provider-status-inventory {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.provider-inventory-lead {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.provider-auth-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.provider-auth-card {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.025);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.provider-auth-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.provider-auth-card-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.provider-auth-source {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.provider-auth-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.provider-auth-summary {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.86rem;
+}
+
+.provider-mode-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.provider-mode-pill {
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  text-transform: capitalize;
+}
+
+.provider-mode-pill.active {
+  color: var(--text-primary);
+  border-color: rgba(82, 196, 255, 0.5);
+  background: rgba(82, 196, 255, 0.12);
+}
+
+.provider-guidance-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.82rem;
+}
+
+.provider-token-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.provider-auth-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.provider-persist-toggle {
+  margin-right: 2px;
+}
+
+.provider-session-label {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
 /* ─── Section Headers ─── */
 .section-head {
   font-size: 0.78rem;

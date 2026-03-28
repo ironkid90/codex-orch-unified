@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { inspectControlCenter } from "@/lib/swarm/control-center";
+import { resolveDashboardWorkspace } from "@/lib/swarm/dashboard-workspaces";
 import { getRuntime } from "@/lib/swarm/runtime";
 import { swarmStore } from "@/lib/swarm/store";
 import type { RunMode, SwarmFeatures } from "@/lib/swarm/types";
@@ -28,8 +29,29 @@ export async function POST(request: Request) {
     );
   }
 
+  let payload: StartPayload = {};
   try {
-    const controlCenter = await inspectControlCenter(process.cwd());
+    payload = (await request.json()) as StartPayload;
+  } catch {
+    payload = {};
+  }
+
+  let workspaceRoot = process.cwd();
+  try {
+    workspaceRoot = await resolveDashboardWorkspace({
+      requestedWorkspace: payload.workspace,
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error: error instanceof Error ? error.message : String(error),
+      },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const controlCenter = await inspectControlCenter(workspaceRoot);
     if (controlCenter.blockingIssues.length > 0) {
       return NextResponse.json(
         {
@@ -49,17 +71,10 @@ export async function POST(request: Request) {
     );
   }
 
-  let payload: StartPayload = {};
-  try {
-    payload = (await request.json()) as StartPayload;
-  } catch {
-    payload = {};
-  }
-
   try {
     const result = await runtime.startRun({
       maxRounds: payload.maxRounds,
-      workspace: payload.workspace,
+      workspace: workspaceRoot,
       mode: payload.mode,
       features: payload.features,
       prompt: payload.prompt,

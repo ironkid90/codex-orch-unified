@@ -3,6 +3,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { MemoryStatusWidget } from "@/app/components/MemoryStatusWidget";
 import { AntigravityPanel } from "@/app/components/AntigravityPanel";
+import { ProviderStatusInventory } from "@/app/components/dashboard/settings/ProviderStatusInventory";
+import { useProviderAuthInventory } from "@/app/hooks/useProviderAuthInventory";
+import { WorkspaceSelector } from "@/app/components/dashboard/settings/WorkspaceSelector";
+import {
+  buildWorkspaceAwareStartPayload,
+  buildWorkspaceScopedUrl,
+  useWorkspaceSelection,
+} from "@/app/hooks/useWorkspaceSelection";
 import ReactMarkdown from "react-markdown";
 import { Play, Pause, Rewind, FastForward } from "lucide-react";
 
@@ -27,6 +35,7 @@ interface ControlCenterEnvRequirement {
 
 interface ControlCenterSnapshot {
   checkedAt: string;
+  workspaceRoot?: string;
   mcpSettingsFound: boolean;
   mcpSettingsPath: string;
   enabledServers: string[];
@@ -113,20 +122,23 @@ export default function HomePage() {
   const [secretInputs, setSecretInputs] = useState<Record<string, string>>({});
   const [registryPathInput, setRegistryPathInput] = useState("");
   const [prompt, setPrompt] = useState("");
+  const providerInventory = useProviderAuthInventory();
+  const workspaceSelection = useWorkspaceSelection();
 
   const loadControlCenter = useCallback(async () => {
     try {
-      const res = await fetch("/api/swarm/control-center", { cache: "no-store" });
+      const res = await fetch(
+        buildWorkspaceScopedUrl("/api/swarm/control-center", workspaceSelection.selectedWorkspace),
+        { cache: "no-store" },
+      );
       if (!res.ok) throw new Error(`Failed to load control center: ${res.status}`);
       const data = (await res.json()) as ControlCenterResponse;
       setControlCenter(data.controlCenter);
-      if (data.controlCenter.dockerRegistry.registryPath) {
-        setRegistryPathInput(data.controlCenter.dockerRegistry.registryPath);
-      }
+      setRegistryPathInput(data.controlCenter.dockerRegistry.registryPath || "");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, []);
+  }, [workspaceSelection.selectedWorkspace]);
 
   const loadState = useCallback(async () => {
     const res = await fetch("/api/swarm/state", { cache: "no-store" });
@@ -147,6 +159,15 @@ export default function HomePage() {
   }, [loadState]);
 
   useEffect(() => { void loadControlCenter(); }, [loadControlCenter]);
+
+  useEffect(() => {
+    void providerInventory.refresh();
+  }, [providerInventory.refresh, workspaceSelection.selectedWorkspace]);
+
+  useEffect(() => {
+    setSecretInputs({});
+    setSettingsMessage(null);
+  }, [workspaceSelection.selectedWorkspace]);
 
   useEffect(() => {
     const source = new EventSource("/api/swarm/stream");
@@ -176,7 +197,15 @@ export default function HomePage() {
       const res = await fetch("/api/swarm/start", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ maxRounds, mode, features, prompt }),
+        body: JSON.stringify(
+          buildWorkspaceAwareStartPayload({
+            maxRounds,
+            mode,
+            features,
+            prompt,
+            workspace: workspaceSelection.selectedWorkspace,
+          }),
+        ),
       });
       const payload = (await res.json()) as StartResponse;
       if (!res.ok) {
@@ -191,7 +220,7 @@ export default function HomePage() {
     } finally {
       setBusy(false);
     }
-  }, [features, loadControlCenter, loadState, maxRounds, mode]);
+  }, [features, loadControlCenter, loadState, maxRounds, mode, prompt, workspaceSelection.selectedWorkspace]);
 
   const controlRun = useCallback(
     async (action: "pause" | "resume" | "rewind", round?: number) => {
@@ -227,7 +256,8 @@ export default function HomePage() {
       const currentRegistryPath = controlCenter?.dockerRegistry.registryPath || "";
       const nextRegistryPath = registryPathInput.trim();
 
-      const res = await fetch("/api/swarm/control-center", {
+      const scopedUrl = buildWorkspaceScopedUrl("/api/swarm/control-center", workspaceSelection.selectedWorkspace);
+      const res2 = await fetch(scopedUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -236,8 +266,8 @@ export default function HomePage() {
         }),
       });
 
-      const payload = (await res.json()) as ControlCenterResponse & { message?: string; error?: string };
-      if (!res.ok) throw new Error(payload.error || "Unable to save control-center settings.");
+      const payload = (await res2.json()) as ControlCenterResponse & { message?: string; error?: string };
+      if (!res2.ok) throw new Error(payload.error || "Unable to save control-center settings.");
 
       setSecretInputs({});
       setControlCenter(payload.controlCenter);
@@ -248,7 +278,7 @@ export default function HomePage() {
     } finally {
       setSettingsBusy(false);
     }
-  }, [controlCenter?.dockerRegistry.registryPath, loadState, registryPathInput, secretInputs]);
+  }, [controlCenter?.dockerRegistry.registryPath, loadState, registryPathInput, secretInputs, workspaceSelection.selectedWorkspace]);
 
   const latestEvents = useMemo(() => {
     if (!state) return [];
@@ -326,12 +356,26 @@ export default function HomePage() {
           <span className="sep">|</span>
           <span>Mode: {state?.mode ?? "—"}</span>
           <span className="sep">|</span>
+          <span>Workspace: {workspaceSelection.selectedWorkspace || controlCenter?.workspaceRoot || "—"}</span>
+          <span className="sep">|</span>
           <span>Round: {state?.currentRound ?? 0}/{state?.maxRounds ?? "—"}</span>
           <span className="sep">|</span>
           <span>{liveIndicator}</span>
         </div>
 
         <div className="header-controls">
+          <WorkspaceSelector
+            selectedWorkspace={workspaceSelection.selectedWorkspace}
+            manualWorkspace={workspaceSelection.manualWorkspace}
+            status={workspaceSelection.status}
+            error={workspaceSelection.error}
+            inventory={workspaceSelection.inventory}
+            onWorkspaceChange={workspaceSelection.setSelectedWorkspace}
+            onManualWorkspaceChange={workspaceSelection.setManualWorkspace}
+            onApplyManualWorkspace={workspaceSelection.applyManualWorkspace}
+            onRefresh={() => void workspaceSelection.refresh()}
+            busy={busy || settingsBusy || isRunning}
+          />
           <div className="control-bar">
             <label className="control-label">
               Rounds
@@ -544,6 +588,8 @@ export default function HomePage() {
           <div className="round-list">
             <div className="round-row">
               <div className="round-detail">
+                Workspace: {controlCenter?.workspaceRoot || workspaceSelection.selectedWorkspace || "—"}
+                <br />
                 MCP settings: {controlCenter?.mcpSettingsFound ? "found" : "missing"}
                 {controlCenter?.mcpSettingsPath ? ` · ${controlCenter.mcpSettingsPath}` : ""}
                 <br />
@@ -623,6 +669,14 @@ export default function HomePage() {
             {settingsMessage && <span className="control-center-message">{settingsMessage}</span>}
           </div>
         </section>
+
+        <ProviderStatusInventory
+          inventory={providerInventory.inventory}
+          status={providerInventory.status}
+          error={providerInventory.error}
+          onSaveToken={providerInventory.saveToken}
+          onRefresh={providerInventory.refreshProvider}
+        />
 
         {/* Global HAM Memory Status & Antigravity Panel */}
         <div className="content-grid equal">

@@ -7,6 +7,7 @@ import {
   buildProviderInventoryViewModel,
   createProviderTokenSavePayload,
 } from "../../../app/hooks/useProviderAuthInventory";
+import { OpenAIAuthSettings } from "../../../app/components/dashboard/settings/OpenAIAuthSettings";
 import { ProviderStatusInventory } from "../../../app/components/dashboard/settings/ProviderStatusInventory";
 
 test("buildProviderInventoryViewModel surfaces OpenAI ChatGPT/Codex and gateway-aware onboarding guidance", () => {
@@ -143,7 +144,8 @@ test("ProviderStatusInventory renders provider setup visibility and external-log
   );
 
   assert.match(html, /OpenAI/);
-  assert.match(html, /ChatGPT\/Codex/i);
+  assert.match(html, /ChatGPT OAuth/i);
+  assert.match(html, /Codex OAuth/i);
   assert.match(html, /codex login/i);
   assert.match(html, /Google \/ Gemini/);
   assert.match(html, /Application Default Credentials/i);
@@ -152,4 +154,31 @@ test("ProviderStatusInventory renders provider setup visibility and external-log
   assert.match(html, /API key only/i);
   assert.match(html, /Save to env/i);
   assert.match(html, /Session only/i);
+});
+
+test("OpenAIAuthSettings renders ChatGPT OAuth and Codex OAuth as distinct supported modes", () => {
+  const inventory = buildProviderInventoryViewModel({
+    providers: {
+      openai: {
+        provider: "openai",
+        status: "active",
+        source: "~/.codex/auth.json",
+        updatedAt: "2026-03-28T05:00:00.000Z",
+        metadata: {
+          mode: "chatgpt_oauth",
+          availableModes: ["api_key", "bearer_token", "chatgpt_oauth", "codex_oauth"],
+        },
+      },
+    },
+  });
+
+  const html = renderToStaticMarkup(
+    React.createElement(OpenAIAuthSettings, {
+      provider: inventory.providers.openai,
+    }),
+  );
+
+  assert.match(html, /ChatGPT OAuth/);
+  assert.match(html, /Codex OAuth/);
+  assert.doesNotMatch(html, /ChatGPT\/Codex/);
 });
