@@ -24,6 +24,7 @@ export async function GET(request: Request) {
       let lastSerializedState = "";
       let lastSerializedGraphState = "";
       let lastSerializedTokens = "";
+      let graphReadInFlight = false;
 
       const pushLatestState = () => {
         if (closed) return;
@@ -35,8 +36,9 @@ export async function GET(request: Request) {
           push("state", nextState);
         }
 
-        // Push graph execution state if a run is active
-        if (nextState.runId) {
+        // Push graph execution state if a run is active (guarded against concurrent reads)
+        if (nextState.runId && !graphReadInFlight) {
+          graphReadInFlight = true;
           graphStore.getExecutionState(nextState.runId).then((graphState) => {
             if (closed || !graphState) return;
             const graphSerialized = JSON.stringify(graphState);
@@ -46,6 +48,8 @@ export async function GET(request: Request) {
             }
           }).catch((err) => {
             if (!closed) console.warn("[SSE] graph state push failed:", err);
+          }).finally(() => {
+            graphReadInFlight = false;
           });
         }
 

@@ -16,8 +16,12 @@ async function ensureGraphDirs(): Promise<void> {
 }
 
 function safePath(baseDir: string, name: string): string {
-  const resolved = path.resolve(baseDir, `${name}.json`);
-  if (!resolved.startsWith(baseDir + path.sep) && resolved !== baseDir) {
+  const trimmed = name.trim();
+  if (!trimmed || /[/\\]/.test(trimmed) || trimmed === "." || trimmed === "..") {
+    throw new Error(`Invalid identifier: "${name}"`);
+  }
+  const resolved = path.resolve(baseDir, `${trimmed}.json`);
+  if (!resolved.startsWith(baseDir + path.sep)) {
     throw new Error(`Invalid identifier: path traversal detected in "${name}"`);
   }
   return resolved;

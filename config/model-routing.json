@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-03-22T08:08:00.000Z",
+  "updatedAt": "2026-03-28T03:57:01.315Z",
   "source": "manual multi-provider prototype release",
   "probes": [
     {
@@ -60,37 +60,37 @@
     "planner": {
       "provider": "anthropic",
       "model": "claude-opus-4-6",
-      "score": 95.0,
+      "score": 95,
       "rationale": "Best for planning/reasoning tasks."
     },
     "research": {
       "provider": "gemini",
       "model": "gemini-3.1-pro-preview",
-      "score": 92.0,
+      "score": 92,
       "rationale": "Large context window ideal for cross-file analysis."
     },
     "worker1": {
       "provider": "openai",
       "model": "gpt-5.4",
-      "score": 98.0,
+      "score": 98,
       "rationale": "Strong coding capabilities."
     },
     "worker2": {
       "provider": "anthropic",
       "model": "claude-sonnet-4-5",
-      "score": 94.0,
+      "score": 94,
       "rationale": "Excellent for code auditing and review."
     },
     "evaluator": {
       "provider": "anthropic",
       "model": "claude-opus-4-6",
-      "score": 96.0,
+      "score": 96,
       "rationale": "Deep analysis and evaluation capabilities."
     },
     "coordinator": {
       "provider": "openai",
       "model": "gpt-5.4",
-      "score": 93.0,
+      "score": 93,
       "rationale": "Strong decision-making for coordination."
     }
   },
@@ -99,13 +99,13 @@
       {
         "provider": "openai",
         "model": "gpt-5.4",
-        "score": 90.0,
+        "score": 90,
         "rationale": "OpenAI fallback for planning."
       },
       {
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
-        "score": 85.0,
+        "score": 85,
         "rationale": "Gemini fallback for planning."
       }
     ],
@@ -113,13 +113,13 @@
       {
         "provider": "anthropic",
         "model": "claude-opus-4-6",
-        "score": 88.0,
+        "score": 88,
         "rationale": "Anthropic fallback for research."
       },
       {
         "provider": "openai",
         "model": "gpt-5.4",
-        "score": 82.0,
+        "score": 82,
         "rationale": "OpenAI fallback for research."
       }
     ],
@@ -127,13 +127,13 @@
       {
         "provider": "anthropic",
         "model": "claude-sonnet-4-5",
-        "score": 90.0,
+        "score": 90,
         "rationale": "Anthropic fallback for coding."
       },
       {
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
-        "score": 85.0,
+        "score": 85,
         "rationale": "Gemini fallback for coding."
       }
     ],
@@ -141,13 +141,13 @@
       {
         "provider": "openai",
         "model": "gpt-5.4",
-        "score": 88.0,
+        "score": 88,
         "rationale": "OpenAI fallback for auditing."
       },
       {
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
-        "score": 82.0,
+        "score": 82,
         "rationale": "Gemini fallback for auditing."
       }
     ],
@@ -155,13 +155,13 @@
       {
         "provider": "openai",
         "model": "gpt-5.4",
-        "score": 88.0,
+        "score": 88,
         "rationale": "OpenAI fallback for evaluation."
       },
       {
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
-        "score": 84.0,
+        "score": 84,
         "rationale": "Gemini fallback for evaluation."
       }
     ],
@@ -169,13 +169,13 @@
       {
         "provider": "anthropic",
         "model": "claude-opus-4-6",
-        "score": 90.0,
+        "score": 90,
         "rationale": "Anthropic fallback for coordination."
       },
       {
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
-        "score": 82.0,
+        "score": 82,
         "rationale": "Gemini fallback for coordination."
       }
     ]

@@ -166,6 +166,10 @@ export class GraphExecutor {
       notifyStateChange(state);
 
       while (state.currentNodeIds.length > 0 && !this.isComplete(state)) {
+        // Snapshot context before parallel dispatch so each node gets an
+        // immutable view — prevents races if executeNode mutates context.
+        const contextSnapshot = { ...(state.context || {}) };
+
         const promises = state.currentNodeIds.map(async (nodeId) => {
           const node = this.getNode(nodeId);
           if (!node) return { nodeId, status: "failed" as const, error: "Node not found" };
@@ -174,7 +178,7 @@ export class GraphExecutor {
             return { nodeId, status: "completed" as const, round, output: undefined };
           }
           if (this.config?.executeNode) {
-            return await this.config.executeNode(node, state.context || {}, round);
+            return await this.config.executeNode(node, contextSnapshot, round);
           }
           return { nodeId, status: "completed" as const, round };
         });

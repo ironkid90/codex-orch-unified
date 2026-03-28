@@ -97,7 +97,13 @@ const STALL_TIMEOUT_MS =
 const HEARTBEAT_INTERVAL_MS =
   parseInt(process.env.SWARM_HEARTBEAT_INTERVAL_MS ?? "3000", 10) || 3_000;
 /** Tracks token usage per agent session across the lifetime of a run. */
-const tokenTracker = new TokenTracker();
+declare global {
+  var __codexTokenTracker: TokenTracker | undefined;
+}
+const tokenTracker = global.__codexTokenTracker ?? new TokenTracker();
+if (!global.__codexTokenTracker) {
+  global.__codexTokenTracker = tokenTracker;
+}
 export function getTokenTracker(): TokenTracker { return tokenTracker; }
 /** Module-level workspace manager (validates paths inside PROJECT_ROOT). */
 const _workspaceManager = new WorkspaceManager({ root: PROJECT_ROOT });

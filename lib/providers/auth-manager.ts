@@ -198,6 +198,8 @@ export class ProviderAuthManager {
     await this.persistState();
 
     if (expiresInSeconds && expiresInSeconds > 60) {
+      // Write full token to env so the scheduled refresh can re-resolve it
+      await this.writeTokenToEnv(provider, token).catch(() => { /* best-effort */ });
       this.scheduleRefresh(provider, (expiresInSeconds - 60) * 1000);
     }
 
@@ -222,7 +224,9 @@ export class ProviderAuthManager {
     if (!envKey) return;
 
     const regex = new RegExp(`^${envKey}=.*$`, "m");
-    const newLine = `${envKey}=${token}`;
+    const sanitized = token.replace(/[\r\n]/g, "");
+    if (!sanitized) return;
+    const newLine = `${envKey}=${sanitized}`;
 
     if (regex.test(content)) {
       content = content.replace(regex, newLine);
@@ -232,7 +236,7 @@ export class ProviderAuthManager {
 
     await writeFile(envPath, content, "utf8");
 
-    process.env[envKey] = token;
+    process.env[envKey] = sanitized;
   }
 
   private isExpired(entry: ProviderTokenEntry): boolean {
