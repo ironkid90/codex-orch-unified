@@ -269,15 +269,30 @@ export function createProviderTokenSavePayload({ token, persistToEnv = false }: 
   };
 }
 
-async function fetchProviderInventory(): Promise<ProviderInventoryApiResponse> {
-  const response = await fetch("/api/auth/openai?all=true", { cache: "no-store" });
+export function buildProviderAuthInventoryUrl(provider: string, workspace?: string | null, includeAll = false): string {
+  const params = new URLSearchParams();
+  const normalizedWorkspace = workspace?.trim();
+  if (normalizedWorkspace) {
+    params.set("workspace", normalizedWorkspace);
+  }
+  if (includeAll) {
+    params.set("all", "true");
+  }
+
+  const query = params.toString();
+  const basePath = `/api/auth/${encodeURIComponent(provider)}`;
+  return query ? `${basePath}?${query}` : basePath;
+}
+
+async function fetchProviderInventory(workspace?: string | null): Promise<ProviderInventoryApiResponse> {
+  const response = await fetch(buildProviderAuthInventoryUrl("openai", workspace, true), { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Failed to load provider auth inventory: ${response.status}`);
   }
   return response.json() as Promise<ProviderInventoryApiResponse>;
 }
 
-export function useProviderAuthInventory(autoLoad = true): UseProviderAuthInventoryResult {
+export function useProviderAuthInventory(autoLoad = true, workspace?: string | null): UseProviderAuthInventoryResult {
   const [status, setStatus] = useState<UseProviderAuthInventoryResult["status"]>("idle");
   const [error, setError] = useState<string | null>(null);
   const [rawProviders, setRawProviders] = useState<Record<string, ProviderInventoryApiEntry>>({});
@@ -286,17 +301,17 @@ export function useProviderAuthInventory(autoLoad = true): UseProviderAuthInvent
     setStatus("loading");
     setError(null);
     try {
-      const response = await fetchProviderInventory();
+      const response = await fetchProviderInventory(workspace);
       setRawProviders(response.providers);
       setStatus("ready");
     } catch (refreshError) {
       setStatus("error");
       setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
     }
-  }, []);
+  }, [workspace]);
 
   const refreshProvider = useCallback(async (provider: string) => {
-    const response = await fetch(`/api/auth/${encodeURIComponent(provider)}`, {
+    const response = await fetch(buildProviderAuthInventoryUrl(provider, workspace), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "refresh" }),
@@ -305,10 +320,10 @@ export function useProviderAuthInventory(autoLoad = true): UseProviderAuthInvent
       throw new Error(`Failed to refresh ${provider} auth status: ${response.status}`);
     }
     await refresh();
-  }, [refresh]);
+  }, [refresh, workspace]);
 
   const saveToken = useCallback(async (provider: string, options: ProviderTokenSaveOptions) => {
-    const response = await fetch(`/api/auth/${encodeURIComponent(provider)}`, {
+    const response = await fetch(buildProviderAuthInventoryUrl(provider, workspace), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(createProviderTokenSavePayload(options)),
@@ -317,12 +332,12 @@ export function useProviderAuthInventory(autoLoad = true): UseProviderAuthInvent
       throw new Error(`Failed to save ${provider} credentials: ${response.status}`);
     }
     await refresh();
-  }, [refresh]);
+  }, [refresh, workspace]);
 
   useEffect(() => {
     if (!autoLoad) return;
     void refresh();
-  }, [autoLoad, refresh]);
+  }, [autoLoad, refresh, workspace]);
 
   const inventory = useMemo(
     () => buildProviderInventoryViewModel({ providers: rawProviders }),

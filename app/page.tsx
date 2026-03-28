@@ -6,6 +6,10 @@ import { AntigravityPanel } from "@/app/components/AntigravityPanel";
 import { ProviderStatusInventory } from "@/app/components/dashboard/settings/ProviderStatusInventory";
 import { useProviderAuthInventory } from "@/app/hooks/useProviderAuthInventory";
 import { WorkspaceSelector } from "@/app/components/dashboard/settings/WorkspaceSelector";
+import { useSwarmDashboardData } from "@/app/hooks/useSwarmDashboardData";
+import { useSwarmDashboardStream } from "@/app/hooks/useSwarmDashboardStream";
+import { useDashboardLayoutState } from "@/app/hooks/useDashboardLayoutState";
+import { deriveHomePageDashboardState, resolveHomePageError } from "@/app/lib/dashboard/home-page-hook-state";
 import {
   buildWorkspaceAwareStartPayload,
   buildWorkspaceScopedUrl,
@@ -14,17 +18,8 @@ import {
 import ReactMarkdown from "react-markdown";
 import { Play, Pause, Rewind, FastForward } from "lucide-react";
 
-import type { PendingControlRequest, RunMode, SwarmFeatures, SwarmRunState } from "@/lib/swarm/types";
+import type { PendingControlRequest, RunMode, SwarmFeatures } from "@/lib/swarm/types";
 import { DEFAULT_FEATURES } from "@/lib/swarm/types";
-
-interface StateResponse {
-  state: SwarmRunState;
-  capabilities: {
-    supportsLocalExecution: boolean;
-    supportsPauseResume: boolean;
-    supportsRewind: boolean;
-  };
-}
 
 interface ControlCenterEnvRequirement {
   name: string;
@@ -107,23 +102,41 @@ const AGENT_COLORS: Record<string, string> = {
 };
 
 export default function HomePage() {
-  const [state, setState] = useState<SwarmRunState | null>(null);
   const [mode, setMode] = useState<RunMode>("local");
   const [maxRounds, setMaxRounds] = useState(3);
   const [busy, setBusy] = useState(false);
-  const [supportsLocal, setSupportsLocal] = useState(true);
-  const [supportsPauseResume, setSupportsPauseResume] = useState(true);
-  const [supportsRewind, setSupportsRewind] = useState(true);
   const [features, setFeatures] = useState<SwarmFeatures>(DEFAULT_FEATURES);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [controlCenter, setControlCenter] = useState<ControlCenterSnapshot | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [secretInputs, setSecretInputs] = useState<Record<string, string>>({});
   const [registryPathInput, setRegistryPathInput] = useState("");
   const [prompt, setPrompt] = useState("");
-  const providerInventory = useProviderAuthInventory();
   const workspaceSelection = useWorkspaceSelection();
+  const layout = useDashboardLayoutState();
+  const dashboardData = useSwarmDashboardData({ selectedAgentId: layout.selectedAgentId });
+  const dashboardStream = useSwarmDashboardStream();
+  const providerInventory = useProviderAuthInventory(true, workspaceSelection.selectedWorkspace);
+
+  const dashboard = useMemo(
+    () =>
+      deriveHomePageDashboardState({
+        data: dashboardData,
+        stream: dashboardStream,
+        selectedAgentId: layout.selectedAgentId,
+      }),
+    [dashboardData, dashboardStream, layout.selectedAgentId],
+  );
+  const state = dashboard.state;
+  const error = resolveHomePageError({
+    actionError,
+    dataError: dashboardData.error,
+    streamError: dashboardStream.error,
+  });
+  const supportsLocal = dashboard.capabilities?.supportsLocalExecution ?? true;
+  const supportsPauseResume = dashboard.capabilities?.supportsPauseResume ?? true;
+  const supportsRewind = dashboard.capabilities?.supportsRewind ?? true;
 
   const loadControlCenter = useCallback(async () => {
     try {
@@ -136,29 +149,23 @@ export default function HomePage() {
       setControlCenter(data.controlCenter);
       setRegistryPathInput(data.controlCenter.dockerRegistry.registryPath || "");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setActionError(err instanceof Error ? err.message : String(err));
     }
   }, [workspaceSelection.selectedWorkspace]);
 
-  const loadState = useCallback(async () => {
-    const res = await fetch("/api/swarm/state", { cache: "no-store" });
-    if (!res.ok) throw new Error(`Failed to load state: ${res.status}`);
-    const data = (await res.json()) as StateResponse;
-    setState(data.state);
-    setFeatures(data.state.features);
-    setSupportsLocal(data.capabilities.supportsLocalExecution);
-    setSupportsPauseResume(data.capabilities.supportsPauseResume);
-    setSupportsRewind(data.capabilities.supportsRewind);
-    if (!data.capabilities.supportsLocalExecution) setMode("demo");
-  }, []);
+  useEffect(() => { void loadControlCenter(); }, [loadControlCenter]);
 
   useEffect(() => {
-    void loadState().catch((err) => {
-      setError(err instanceof Error ? err.message : String(err));
-    });
-  }, [loadState]);
+    if (state?.features) {
+      setFeatures(state.features);
+    }
+  }, [state?.features]);
 
-  useEffect(() => { void loadControlCenter(); }, [loadControlCenter]);
+  useEffect(() => {
+    if (!supportsLocal) {
+      setMode("demo");
+    }
+  }, [supportsLocal]);
 
   useEffect(() => {
     void providerInventory.refresh();
@@ -169,29 +176,9 @@ export default function HomePage() {
     setSettingsMessage(null);
   }, [workspaceSelection.selectedWorkspace]);
 
-  useEffect(() => {
-    const source = new EventSource("/api/swarm/stream");
-    const onState = (event: Event) => {
-      const message = event as MessageEvent<string>;
-      try {
-        const nextState = JSON.parse(message.data) as SwarmRunState;
-        setState(nextState);
-        setError(null);
-      } catch {
-        // ignore malformed SSE payloads during reconnects
-      }
-    };
-    source.addEventListener("state", onState);
-    source.onerror = () => setError("Stream interrupted. Reconnecting...");
-    return () => {
-      source.removeEventListener("state", onState);
-      source.close();
-    };
-  }, []);
-
   const startRun = useCallback(async () => {
     setBusy(true);
-    setError(null);
+    setActionError(null);
     setSettingsMessage(null);
     try {
       const res = await fetch("/api/swarm/start", {
@@ -214,18 +201,18 @@ export default function HomePage() {
         }
         throw new Error(payload.error || "Unable to start run.");
       }
-      await Promise.all([loadState(), loadControlCenter()]);
+      await Promise.all([dashboardData.refresh(), loadControlCenter()]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
-  }, [features, loadControlCenter, loadState, maxRounds, mode, prompt, workspaceSelection.selectedWorkspace]);
+  }, [dashboardData, features, loadControlCenter, maxRounds, mode, prompt, workspaceSelection.selectedWorkspace]);
 
   const controlRun = useCallback(
     async (action: "pause" | "resume" | "rewind", round?: number) => {
       setBusy(true);
-      setError(null);
+      setActionError(null);
       try {
         const res = await fetch("/api/swarm/control", {
           method: "POST",
@@ -234,19 +221,19 @@ export default function HomePage() {
         });
         const payload = (await res.json()) as { error?: string };
         if (!res.ok) throw new Error(payload.error || `Failed: ${action}`);
-        await loadState();
+        await dashboardData.refresh();
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        setActionError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
       }
     },
-    [loadState],
+    [dashboardData],
   );
 
   const saveControlCenter = useCallback(async () => {
     setSettingsBusy(true);
-    setError(null);
+    setActionError(null);
     setSettingsMessage(null);
 
     try {
@@ -272,13 +259,13 @@ export default function HomePage() {
       setSecretInputs({});
       setControlCenter(payload.controlCenter);
       setSettingsMessage(payload.message || "Settings updated.");
-      await loadState();
+      await dashboardData.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setSettingsBusy(false);
     }
-  }, [controlCenter?.dockerRegistry.registryPath, loadState, registryPathInput, secretInputs, workspaceSelection.selectedWorkspace]);
+  }, [controlCenter?.dockerRegistry.registryPath, dashboardData, registryPathInput, secretInputs, workspaceSelection.selectedWorkspace]);
 
   const latestEvents = useMemo(() => {
     if (!state) return [];
@@ -301,23 +288,17 @@ export default function HomePage() {
   const canSaveControlCenter = hasPendingSecretValues || hasRegistryPathUpdate;
 
   const runBadge = statusBadge(state?.rounds.at(-1)?.status ?? "IDLE");
-  const isRunning = Boolean(state?.running);
-  const latestCheckpointRound = state?.checkpoints.at(-1)?.round;
+  const isRunning = dashboard.viewModel.topSummary.status === "running" || Boolean(state?.running);
+  const latestCheckpointRound = dashboard.viewModel.topSummary.latestCheckpointRound;
   const agents = state ? Object.values(state.agents) : [];
   const pendingControls = state?.pendingControls ?? [];
   const latestPendingControl = pendingControls.at(-1);
   const pendingPause = pendingControls.find((control) => control.action === "pause");
-  const activeStep = state?.activity.activeStep;
-  const activeGate = state?.activity.activeGate;
-  const heartbeatAt = state?.activity.lastHeartbeatAt;
+  const activeStep = dashboard.viewModel.topSummary.activeStep;
+  const activeGate = dashboard.viewModel.topSummary.activeGate;
+  const heartbeatAt = dashboard.viewModel.topSummary.heartbeatAt;
   const ioSnapshot = state?.ioCoordinator;
-  const ioCompressionRatio =
-    ioSnapshot && ioSnapshot.contextOptimization.originalEstimatedChars > 0
-      ? Math.max(
-          0,
-          1 - ioSnapshot.contextOptimization.optimizedEstimatedChars / ioSnapshot.contextOptimization.originalEstimatedChars,
-        )
-      : 0;
+  const ioCompressionRatio = dashboard.viewModel.telemetry.io.contextCompressionRatio;
 
   const liveIndicator = latestPendingControl
     ? `⌛ ${describeControlAction(latestPendingControl.action)}`
@@ -352,13 +333,13 @@ export default function HomePage() {
         </div>
 
         <div className="header-meta">
-          <span>ID: {state?.runId?.slice(0, 8) ?? "—"}</span>
+          <span>ID: {dashboard.viewModel.topSummary.runId?.slice(0, 8) ?? "—"}</span>
           <span className="sep">|</span>
-          <span>Mode: {state?.mode ?? "—"}</span>
+          <span>Mode: {dashboard.viewModel.topSummary.mode ?? "—"}</span>
           <span className="sep">|</span>
           <span>Workspace: {workspaceSelection.selectedWorkspace || controlCenter?.workspaceRoot || "—"}</span>
           <span className="sep">|</span>
-          <span>Round: {state?.currentRound ?? 0}/{state?.maxRounds ?? "—"}</span>
+          <span>Round: {dashboard.viewModel.topSummary.currentRound}/{dashboard.viewModel.topSummary.maxRounds || "—"}</span>
           <span className="sep">|</span>
           <span>{liveIndicator}</span>
         </div>
@@ -431,7 +412,7 @@ export default function HomePage() {
             {canRewind && (
               <button
                 className="btn btn-secondary"
-                onClick={() => void controlRun("rewind", latestCheckpointRound)}
+                onClick={() => void controlRun("rewind", latestCheckpointRound ?? undefined)}
                 disabled={busy}
                 style={{ display: 'flex', alignItems: 'center', gap: 6 }}
               >
@@ -454,6 +435,7 @@ export default function HomePage() {
         />
         <div className="sidebar-label">Agents</div>
         {agents.map((agent) => {
+          const selectedAgentId = dashboard.viewModel.selectedAgent?.id;
           const p = agent.pdaStage;
           const isPerceive = p === "perceive";
           const isDecide = p === "decide";
@@ -461,7 +443,12 @@ export default function HomePage() {
           const donePerceive = isDecide || isAct;
           const doneDecide = isAct;
           return (
-            <div key={agent.id} className="agent-card">
+            <div
+              key={agent.id}
+              className="agent-card"
+              onClick={() => layout.setSelectedAgentId(agent.id)}
+              style={selectedAgentId === agent.id ? { outline: "1px solid var(--accent-cyan)" } : undefined}
+            >
               <div className="agent-card-head">
                 <span className="agent-name">
                   <span className={`status-dot ${agent.phase}`} />
@@ -530,7 +517,7 @@ export default function HomePage() {
                 Active step: {activeStep || "—"}
                 {state?.activity.activeAgentId ? ` · ${state.activity.activeAgentId}` : ""}
                 <br />
-                Heartbeat: {formatTime(heartbeatAt)} · {heartbeatState}
+                Heartbeat: {formatTime(heartbeatAt ?? undefined)} · {heartbeatState}
               </div>
             </div>
             {state?.pauseReason && (
@@ -544,7 +531,7 @@ export default function HomePage() {
                   <div className="round-detail">
                     {describeControlAction(control.action)}
                     <br />
-                    {formatTime(control.requestedAt)} · {control.source || "operator"}
+                    {formatTime(control.requestedAt)} · {control.source ?? "operator"}
                     {control.round ? ` · target round ${control.round}` : ""}
                     {control.reason ? ` · ${control.reason}` : ""}
                   </div>
@@ -817,90 +804,98 @@ export default function HomePage() {
           <section className="glass-card">
             <div className="glass-card-head">
               <h2>Diagnostics</h2>
+              <button className="btn btn-secondary" onClick={() => layout.setTelemetryDockExpanded(!layout.isTelemetryDockExpanded)}>
+                {layout.isTelemetryDockExpanded ? "Collapse" : "Expand"}
+              </button>
             </div>
-
-            <h3 className="section-head">IO Coordinator</h3>
-            <div className="telemetry-grid">
-              <div className="metric-card">
-                <span className="label">Total Calls</span>
-                <span className="value">{ioSnapshot?.totalCalls ?? 0}</span>
-                <span className="sub">{ioSnapshot?.activeCalls ?? 0} active</span>
-              </div>
-              <div className="metric-card">
-                <span className="label">Failures</span>
-                <span className="value" style={{ color: (ioSnapshot?.failureCount ?? 0) > 0 ? "var(--accent-rose)" : "inherit" }}>{ioSnapshot?.failureCount ?? 0}</span>
-                <span className="sub">{ioSnapshot?.totalRetries ?? 0} retries</span>
-              </div>
-              <div className="metric-card">
-                <span className="label">Avg Latency</span>
-                <span className="value">{formatDurationMs(ioSnapshot?.averageDurationMs)}</span>
-                <span className="sub">Max: {formatDurationMs(ioSnapshot?.maxDurationMs)}</span>
-              </div>
-              <div className="metric-card">
-                <span className="label">Compression</span>
-                <span className="value" style={{ color: "var(--accent-emerald)" }}>{(ioCompressionRatio * 100).toFixed(1)}%</span>
-                <span className="sub">{ioSnapshot?.contextOptimization.estimatedTokensSaved ?? 0} tkns saved</span>
-              </div>
-            </div>
-            
-            <div className="round-list" style={{ marginTop: 12 }}>
-              {ioSnapshot?.lastError && (
-                <div className="round-row">
-                  <div className="round-detail">
-                    Last error: {ioSnapshot.lastError.operationName} · {ioSnapshot.lastError.message}
-                    <br />
-                    {formatTime(ioSnapshot.lastError.at)}
-                    {ioSnapshot.lastError.status !== undefined ? ` · HTTP ${ioSnapshot.lastError.status}` : ""}
-                    {ioSnapshot.lastError.code ? ` · ${ioSnapshot.lastError.code}` : ""}
+            {layout.isTelemetryDockExpanded ? (
+              <>
+                <h3 className="section-head">IO Coordinator</h3>
+                <div className="telemetry-grid">
+                  <div className="metric-card">
+                    <span className="label">Total Calls</span>
+                    <span className="value">{ioSnapshot?.totalCalls ?? 0}</span>
+                    <span className="sub">{ioSnapshot?.activeCalls ?? 0} active</span>
+                  </div>
+                  <div className="metric-card">
+                    <span className="label">Failures</span>
+                    <span className="value" style={{ color: (ioSnapshot?.failureCount ?? 0) > 0 ? "var(--accent-rose)" : "inherit" }}>{ioSnapshot?.failureCount ?? 0}</span>
+                    <span className="sub">{ioSnapshot?.totalRetries ?? 0} retries</span>
+                  </div>
+                  <div className="metric-card">
+                    <span className="label">Avg Latency</span>
+                    <span className="value">{formatDurationMs(ioSnapshot?.averageDurationMs)}</span>
+                    <span className="sub">Max: {formatDurationMs(ioSnapshot?.maxDurationMs)}</span>
+                  </div>
+                  <div className="metric-card">
+                    <span className="label">Compression</span>
+                    <span className="value" style={{ color: "var(--accent-emerald)" }}>{(ioCompressionRatio * 100).toFixed(1)}%</span>
+                    <span className="sub">{ioSnapshot?.contextOptimization.estimatedTokensSaved ?? 0} tkns saved</span>
                   </div>
                 </div>
-              )}
-              {ioSnapshot?.operations.length ? (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
-                  {ioSnapshot.operations.slice(0, 8).map((operation) => (
-                    <div key={operation.name} className="badge info" style={{ padding: "4px 8px", fontSize: "0.68rem" }}>
-                      <strong>{operation.name}</strong>: {operation.callCount} calls · {formatDurationMs(operation.averageDurationMs)} avg
+
+                <div className="round-list" style={{ marginTop: 12 }}>
+                  {ioSnapshot?.lastError && (
+                    <div className="round-row">
+                      <div className="round-detail">
+                        Last error: {ioSnapshot.lastError.operationName} · {ioSnapshot.lastError.message}
+                        <br />
+                        {formatTime(ioSnapshot.lastError.at)}
+                        {ioSnapshot.lastError.status !== undefined ? ` · HTTP ${ioSnapshot.lastError.status}` : ""}
+                        {ioSnapshot.lastError.code ? ` · ${ioSnapshot.lastError.code}` : ""}
+                      </div>
                     </div>
-                  ))}
+                  )}
+                  {ioSnapshot?.operations.length ? (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                      {ioSnapshot.operations.slice(0, 8).map((operation) => (
+                        <div key={operation.name} className="badge info" style={{ padding: "4px 8px", fontSize: "0.68rem" }}>
+                          <strong>{operation.name}</strong>: {operation.callCount} calls · {formatDurationMs(operation.averageDurationMs)} avg
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="empty-text">No ops telemetry yet.</p>
+                  )}
                 </div>
-              ) : (
-                <p className="empty-text">No ops telemetry yet.</p>
-              )}
-            </div>
 
-            <h3 className="section-head">Lint Results</h3>
-            <div className="round-list">
-              {state?.lintResults.length ? (
-                state.lintResults.map((lint) => (
-                  <div key={lint.round} className="round-row">
-                    <div className="round-detail">
-                      R{lint.round} · {lint.command}
-                      <br />
-                      {lint.ran ? `Exit ${lint.exitCode}` : "Not run"} · {lint.passed ? "✓ Pass" : "✗ Fail"}
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="empty-text">No lint records yet.</p>
-              )}
-            </div>
+                <h3 className="section-head">Lint Results</h3>
+                <div className="round-list">
+                  {state?.lintResults.length ? (
+                    state.lintResults.map((lint) => (
+                      <div key={lint.round} className="round-row">
+                        <div className="round-detail">
+                          R{lint.round} · {lint.command}
+                          <br />
+                          {lint.ran ? `Exit ${lint.exitCode}` : "Not run"} · {lint.passed ? "✓ Pass" : "✗ Fail"}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="empty-text">No lint records yet.</p>
+                  )}
+                </div>
 
-            <h3 className="section-head">Ensemble Outcomes</h3>
-            <div className="round-list">
-              {state?.ensembles.length ? (
-                state.ensembles.map((result) => (
-                  <div key={result.round} className="round-row">
-                    <div className="round-detail">
-                      R{result.round} · Variant: {result.selectedVariant} · Status: {result.selectedStatus}
-                      <br />
-                      Votes: {JSON.stringify(result.votes)}
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="empty-text">No ensemble records yet.</p>
-              )}
-            </div>
+                <h3 className="section-head">Ensemble Outcomes</h3>
+                <div className="round-list">
+                  {state?.ensembles.length ? (
+                    state.ensembles.map((result) => (
+                      <div key={result.round} className="round-row">
+                        <div className="round-detail">
+                          R{result.round} · Variant: {result.selectedVariant} · Status: {result.selectedStatus}
+                          <br />
+                          Votes: {JSON.stringify(result.votes)}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="empty-text">No ensemble records yet.</p>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="empty-text">Diagnostics dock collapsed.</p>
+            )}
           </section>
         </div>
       </main>

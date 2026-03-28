@@ -6,8 +6,10 @@ import type { ProviderType } from "./types";
 import { resolveOpenAIAuth, resolveGeminiAuth } from "./auth";
 
 const PROJECT_ROOT = process.cwd();
-const AUTH_STATE_DIR = path.join(PROJECT_ROOT, "runs", "_runtime", "auth");
-const AUTH_STATE_FILE = path.join(AUTH_STATE_DIR, "provider-tokens.json");
+
+export interface ProviderAuthScopeOptions {
+  workspaceRoot?: string | null;
+}
 
 export interface ProviderTokenEntry {
   provider: ProviderType;
@@ -36,59 +38,116 @@ export interface AuthStateSnapshot {
   providers: Record<string, ProviderTokenEntry>;
 }
 
-function ensureAuthDir(): void {
-  mkdirSync(AUTH_STATE_DIR, { recursive: true });
+function resolveScopeRoot(projectRoot: string, workspaceRoot?: string | null): string {
+  return path.resolve(workspaceRoot?.trim() || projectRoot);
 }
 
-async function loadAuthState(): Promise<AuthStateSnapshot> {
-  ensureAuthDir();
-  if (!existsSync(AUTH_STATE_FILE)) {
+function getAuthStateDir(scopeRoot: string): string {
+  return path.join(scopeRoot, "runs", "_runtime", "auth");
+}
+
+function getAuthStateFile(scopeRoot: string): string {
+  return path.join(getAuthStateDir(scopeRoot), "provider-tokens.json");
+}
+
+function ensureAuthDir(scopeRoot: string): void {
+  mkdirSync(getAuthStateDir(scopeRoot), { recursive: true });
+}
+
+function parseEnvLine(line: string): { key: string; value: string } | null {
+  const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+  if (!match) return null;
+  const [, key, rawValue] = match;
+  const value = rawValue.replace(/^['\"]|['\"]$/g, "");
+  return { key, value };
+}
+
+async function loadScopedEnv(scopeRoot: string): Promise<Record<string, string>> {
+  const env: Record<string, string> = {};
+  for (const fileName of [".env", ".env.local"]) {
+    const fullPath = path.join(scopeRoot, fileName);
+    if (!existsSync(fullPath)) continue;
+    const content = await readFile(fullPath, "utf8");
+    for (const line of content.split(/\r?\n/)) {
+      if (!line.trim() || line.trimStart().startsWith("#")) continue;
+      const parsed = parseEnvLine(line);
+      if (parsed) {
+        env[parsed.key] = parsed.value;
+      }
+    }
+  }
+  return env;
+}
+
+async function loadAuthState(scopeRoot: string): Promise<AuthStateSnapshot> {
+  ensureAuthDir(scopeRoot);
+  const authStateFile = getAuthStateFile(scopeRoot);
+  if (!existsSync(authStateFile)) {
     return { savedAt: new Date().toISOString(), providers: {} };
   }
   try {
-    const raw = await readFile(AUTH_STATE_FILE, "utf8");
+    const raw = await readFile(authStateFile, "utf8");
     return JSON.parse(raw) as AuthStateSnapshot;
   } catch {
     return { savedAt: new Date().toISOString(), providers: {} };
   }
 }
 
-async function saveAuthState(state: AuthStateSnapshot): Promise<void> {
-  ensureAuthDir();
+async function saveAuthState(scopeRoot: string, state: AuthStateSnapshot): Promise<void> {
+  ensureAuthDir(scopeRoot);
   state.savedAt = new Date().toISOString();
-  await writeFile(AUTH_STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+  await writeFile(getAuthStateFile(scopeRoot), JSON.stringify(state, null, 2), "utf8");
 }
 
 export class ProviderAuthManager {
+  private readonly projectRoot: string;
   private cache = new Map<string, ProviderTokenEntry>();
   private refreshTimers = new Map<string, NodeJS.Timeout>();
 
-  async initialize(): Promise<void> {
-    const state = await loadAuthState();
-    for (const [key, entry] of Object.entries(state.providers)) {
-      this.cache.set(key, entry);
+  constructor(options: { projectRoot?: string } = {}) {
+    this.projectRoot = path.resolve(options.projectRoot || PROJECT_ROOT);
+  }
+
+  private buildScopeCacheKey(provider: ProviderType, options?: ProviderAuthScopeOptions): string {
+    return `${resolveScopeRoot(this.projectRoot, options?.workspaceRoot)}::${provider}`;
+  }
+
+  private async hydrateScopeCache(options?: ProviderAuthScopeOptions): Promise<void> {
+    const scopeRoot = resolveScopeRoot(this.projectRoot, options?.workspaceRoot);
+    const state = await loadAuthState(scopeRoot);
+    for (const [provider, entry] of Object.entries(state.providers)) {
+      this.cache.set(`${scopeRoot}::${provider}`, entry);
     }
   }
 
-  async getProviderStatus(provider: ProviderType): Promise<ProviderTokenEntry> {
-    const cached = this.cache.get(provider);
+  async initialize(): Promise<void> {
+    await this.hydrateScopeCache();
+  }
+
+  async getProviderStatus(provider: ProviderType, options?: ProviderAuthScopeOptions): Promise<ProviderTokenEntry> {
+    await this.hydrateScopeCache(options);
+    const cacheKey = this.buildScopeCacheKey(provider, options);
+    const cached = this.cache.get(cacheKey);
     if (cached && cached.status === "active" && !this.isExpired(cached)) {
       return cached;
     }
-    return this.refreshProvider(provider);
+    return this.refreshProvider(provider, options);
   }
 
-  async getAllProviderStatuses(): Promise<Record<string, ProviderTokenEntry>> {
+  async getAllProviderStatuses(options?: ProviderAuthScopeOptions): Promise<Record<string, ProviderTokenEntry>> {
     const providers: ProviderType[] = ["openai", "anthropic", "gemini", "ollama", "antigravity"];
     const result: Record<string, ProviderTokenEntry> = {};
     for (const provider of providers) {
-      result[provider] = await this.getProviderStatus(provider);
+      result[provider] = await this.getProviderStatus(provider, options);
     }
     return result;
   }
 
-  async refreshProvider(provider: ProviderType): Promise<ProviderTokenEntry> {
+  async refreshProvider(provider: ProviderType, options?: ProviderAuthScopeOptions): Promise<ProviderTokenEntry> {
     const now = new Date().toISOString();
+    const scopeRoot = resolveScopeRoot(this.projectRoot, options?.workspaceRoot);
+    const scopeEnv = await loadScopedEnv(scopeRoot);
+    const envValue = (key: string): string | undefined => scopeEnv[key]?.trim() || process.env[key]?.trim();
     let entry: ProviderTokenEntry;
 
     try {
@@ -96,7 +155,16 @@ export class ProviderAuthManager {
         case "openai":
         case "openai-compatible":
         case "azure-openai": {
-          const auth = await resolveOpenAIAuth();
+          const auth = await resolveOpenAIAuth({
+            apiKey: envValue("OPENAI_API_KEY"),
+            bearerToken:
+              envValue("OPENAI_BEARER_TOKEN")
+              || envValue("OPENAI_OAUTH_ACCESS_TOKEN")
+              || envValue("AI_GATEWAY_API_KEY")
+              || envValue("VERCEL_OIDC_TOKEN"),
+            baseUrl: envValue("OPENAI_BASE_URL") || envValue("AI_GATEWAY_BASE_URL"),
+            authMode: envValue("SWARM_OPENAI_AUTH_MODE"),
+          });
           entry = {
             provider: "openai",
             token: auth.bearerToken ? `${auth.bearerToken.slice(0, 8)}...` : undefined,
@@ -114,7 +182,12 @@ export class ProviderAuthManager {
           break;
         }
         case "gemini": {
-          const auth = await resolveGeminiAuth();
+          const auth = await resolveGeminiAuth({
+            workspace: scopeRoot,
+            apiKey: envValue("GEMINI_API_KEY"),
+            oauthToken: envValue("GOOGLE_OAUTH_ACCESS_TOKEN"),
+            baseUrl: envValue("GEMINI_BASE_URL"),
+          });
           entry = {
             provider: "gemini",
             token: auth.oauthToken ? `${auth.oauthToken.slice(0, 8)}...` : undefined,
@@ -140,7 +213,7 @@ export class ProviderAuthManager {
           break;
         }
         case "anthropic": {
-          const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+          const apiKey = envValue("ANTHROPIC_API_KEY");
           entry = {
             provider: "anthropic",
             apiKey: apiKey ? `${apiKey.slice(0, 8)}...` : undefined,
@@ -154,7 +227,7 @@ export class ProviderAuthManager {
           break;
         }
         case "ollama": {
-          const host = process.env.OLLAMA_HOST?.trim() || process.env.OLLAMA_BASE_URL?.trim();
+          const host = envValue("OLLAMA_HOST") || envValue("OLLAMA_BASE_URL");
           entry = {
             provider: "ollama",
             source: host || "http://localhost:11434",
@@ -164,8 +237,8 @@ export class ProviderAuthManager {
           break;
         }
         case "antigravity": {
-          const baseUrl = process.env.ANTIGRAVITY_BASE_URL?.trim();
-          const apiKey = process.env.ANTIGRAVITY_API_KEY?.trim();
+          const baseUrl = envValue("ANTIGRAVITY_BASE_URL");
+          const apiKey = envValue("ANTIGRAVITY_API_KEY");
           entry = {
             provider: "antigravity",
             apiKey: apiKey ? `${apiKey.slice(0, 8)}...` : undefined,
@@ -193,21 +266,27 @@ export class ProviderAuthManager {
       };
     }
 
-    this.cache.set(provider, entry);
-    await this.persistState();
+    this.cache.set(this.buildScopeCacheKey(provider, options), entry);
+    await this.persistState(options);
     return entry;
   }
 
-  async refreshAll(): Promise<Record<string, ProviderTokenEntry>> {
+  async refreshAll(options?: ProviderAuthScopeOptions): Promise<Record<string, ProviderTokenEntry>> {
     const providers: ProviderType[] = ["openai", "anthropic", "gemini", "ollama", "antigravity"];
     const result: Record<string, ProviderTokenEntry> = {};
     for (const provider of providers) {
-      result[provider] = await this.refreshProvider(provider);
+      result[provider] = await this.refreshProvider(provider, options);
     }
     return result;
   }
 
-  async storeOAuthToken(provider: ProviderType, token: string, refreshToken?: string, expiresInSeconds?: number): Promise<ProviderTokenEntry> {
+  async storeOAuthToken(
+    provider: ProviderType,
+    token: string,
+    refreshToken?: string,
+    expiresInSeconds?: number,
+    options?: ProviderAuthScopeOptions,
+  ): Promise<ProviderTokenEntry> {
     const now = new Date();
     const entry: ProviderTokenEntry = {
       provider,
@@ -221,20 +300,21 @@ export class ProviderAuthManager {
       status: "active",
     };
 
-    this.cache.set(provider, entry);
-    await this.persistState();
+    this.cache.set(this.buildScopeCacheKey(provider, options), entry);
+    await this.persistState(options);
 
     if (expiresInSeconds && expiresInSeconds > 60) {
       // Write full token to env so the scheduled refresh can re-resolve it
-      await this.writeTokenToEnv(provider, token).catch(() => { /* best-effort */ });
-      this.scheduleRefresh(provider, (expiresInSeconds - 60) * 1000);
+      await this.writeTokenToEnv(provider, token, options).catch(() => { /* best-effort */ });
+      this.scheduleRefresh(provider, (expiresInSeconds - 60) * 1000, options);
     }
 
     return entry;
   }
 
-  async writeTokenToEnv(provider: ProviderType, token: string): Promise<void> {
-    const envPath = path.join(PROJECT_ROOT, ".env.local");
+  async writeTokenToEnv(provider: ProviderType, token: string, options?: ProviderAuthScopeOptions): Promise<void> {
+    const scopeRoot = resolveScopeRoot(this.projectRoot, options?.workspaceRoot);
+    const envPath = path.join(scopeRoot, ".env.local");
     let content = "";
     if (existsSync(envPath)) {
       content = await readFile(envPath, "utf8");
@@ -271,25 +351,32 @@ export class ProviderAuthManager {
     return new Date(entry.expiresAt).getTime() < Date.now();
   }
 
-  private scheduleRefresh(provider: ProviderType, delayMs: number): void {
-    const existing = this.refreshTimers.get(provider);
+  private scheduleRefresh(provider: ProviderType, delayMs: number, options?: ProviderAuthScopeOptions): void {
+    const refreshKey = this.buildScopeCacheKey(provider, options);
+    const existing = this.refreshTimers.get(refreshKey);
     if (existing) clearTimeout(existing);
 
     const timer = setTimeout(() => {
-      void this.refreshProvider(provider).catch((err) => {
+      void this.refreshProvider(provider, options).catch((err) => {
         console.warn(`[AuthManager] Auto-refresh for ${provider} failed:`, err);
       });
     }, delayMs);
 
-    this.refreshTimers.set(provider, timer);
+    this.refreshTimers.set(refreshKey, timer);
   }
 
-  private async persistState(): Promise<void> {
+  private async persistState(options?: ProviderAuthScopeOptions): Promise<void> {
+    const scopeRoot = resolveScopeRoot(this.projectRoot, options?.workspaceRoot);
+    const scopePrefix = `${scopeRoot}::`;
     const state: AuthStateSnapshot = {
       savedAt: new Date().toISOString(),
-      providers: Object.fromEntries(this.cache),
+      providers: Object.fromEntries(
+        Array.from(this.cache.entries())
+          .filter(([key]) => key.startsWith(scopePrefix))
+          .map(([key, entry]) => [key.slice(scopePrefix.length), entry]),
+      ),
     };
-    await saveAuthState(state);
+    await saveAuthState(scopeRoot, state);
   }
 
   destroy(): void {

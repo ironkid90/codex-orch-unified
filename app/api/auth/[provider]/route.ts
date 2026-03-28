@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { providerAuthManager } from "@/lib/providers/auth-manager";
 import type { ProviderType } from "@/lib/providers/types";
+import { resolveDashboardWorkspace } from "@/lib/swarm/dashboard-workspaces";
 
 export const dynamic = "force-dynamic";
 
@@ -31,10 +32,13 @@ export async function GET(
   try {
     const { provider } = await params;
     const all = request.nextUrl.searchParams.get("all") === "true";
+    const workspaceRoot = await resolveDashboardWorkspace({
+      requestedWorkspace: request.nextUrl.searchParams.get("workspace"),
+    });
 
     // ?all=true returns all provider statuses regardless of the slug
     if (all) {
-      const statuses = await providerAuthManager.getAllProviderStatuses();
+      const statuses = await providerAuthManager.getAllProviderStatuses({ workspaceRoot });
       return NextResponse.json({ providers: statuses });
     }
 
@@ -45,7 +49,7 @@ export async function GET(
       );
     }
 
-    const status = await providerAuthManager.getProviderStatus(provider);
+    const status = await providerAuthManager.getProviderStatus(provider, { workspaceRoot });
     return NextResponse.json({ provider, status });
   } catch (error) {
     return NextResponse.json(
@@ -71,6 +75,9 @@ export async function POST(
 ) {
   try {
     const { provider } = await params;
+    const workspaceRoot = await resolveDashboardWorkspace({
+      requestedWorkspace: request.nextUrl.searchParams.get("workspace"),
+    });
 
     if (!isValidProvider(provider)) {
       return NextResponse.json(
@@ -82,7 +89,7 @@ export async function POST(
     const body = await request.json().catch(() => ({}));
 
     if (body.action === "refresh") {
-      const status = await providerAuthManager.refreshProvider(provider);
+      const status = await providerAuthManager.refreshProvider(provider, { workspaceRoot });
       return NextResponse.json({ ok: true, provider, status });
     }
 
@@ -98,10 +105,11 @@ export async function POST(
       body.token,
       body.refreshToken,
       body.expiresIn,
+      { workspaceRoot },
     );
 
     if (body.writeToEnv === true) {
-      await providerAuthManager.writeTokenToEnv(provider, body.token);
+      await providerAuthManager.writeTokenToEnv(provider, body.token, { workspaceRoot });
     }
 
     return NextResponse.json({

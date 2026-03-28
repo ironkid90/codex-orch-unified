@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  buildProviderAuthInventoryUrl,
   buildProviderInventoryViewModel,
   createProviderTokenSavePayload,
 } from "../../../app/hooks/useProviderAuthInventory";
@@ -96,6 +97,19 @@ test("createProviderTokenSavePayload supports session-only and env persistence w
       token: "sk-demo",
       writeToEnv: true,
     },
+  );
+});
+
+test("buildProviderAuthInventoryUrl scopes provider-auth requests to the selected workspace when present", () => {
+  const workspace = "C:/Users/Gabi/Documents/GitHub/codex-orch-unified/.swarm-workspaces/issue-123";
+
+  assert.equal(
+    buildProviderAuthInventoryUrl("openai", workspace),
+    "/api/auth/openai?workspace=C%3A%2FUsers%2FGabi%2FDocuments%2FGitHub%2Fcodex-orch-unified%2F.swarm-workspaces%2Fissue-123",
+  );
+  assert.equal(
+    buildProviderAuthInventoryUrl("openai", workspace, true),
+    "/api/auth/openai?workspace=C%3A%2FUsers%2FGabi%2FDocuments%2FGitHub%2Fcodex-orch-unified%2F.swarm-workspaces%2Fissue-123&all=true",
   );
 });
 

@@ -17,6 +17,10 @@ import {
 
 const REPO_ROOT = process.cwd();
 
+function normalizePathForAssertion(targetPath: string): string {
+  return process.platform === "win32" ? targetPath.toLowerCase() : targetPath;
+}
+
 function writeJson(filePath: string, value: unknown): void {
   mkdirSync(path.dirname(filePath), { recursive: true });
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -158,7 +162,10 @@ test("start route passes the selected workspace through preflight and runtime st
     assert.equal(response.status, 200);
     assert.equal(payload.runId, "run-test-123");
     assert.equal(startedOptions.length, 1);
-    assert.equal(startedOptions[0]?.workspace, selectedWorkspace);
+    assert.equal(
+      normalizePathForAssertion(String(startedOptions[0]?.workspace || "")),
+      normalizePathForAssertion(selectedWorkspace),
+    );
     assert.equal(startedOptions[0]?.maxRounds, 4);
     assert.equal(startedOptions[0]?.mode, "demo");
   } finally {
@@ -179,6 +186,8 @@ test("control-center route inspects and updates the selected workspace instead o
   const selectedWorkspace = mkdtempSync(path.join(workspaceRoot, "route-control-center-"));
   writeJson(path.join(REPO_ROOT, "mcp-settings.json"), { mcpServers: {} });
   writeJson(path.join(selectedWorkspace, "mcp-settings.json"), { mcpServers: {} });
+  const repoEnvLocalPath = path.join(REPO_ROOT, ".env.local");
+  const repoEnvLocalBefore = existsSync(repoEnvLocalPath) ? readFileSync(repoEnvLocalPath, "utf8") : null;
 
   try {
     const route = await loadRouteModule("app/api/swarm/control-center/route.ts");
@@ -187,7 +196,10 @@ test("control-center route inspects and updates the selected workspace instead o
     );
     const getPayload = await getResponse.json();
     assert.equal(getResponse.status, 200);
-    assert.equal(getPayload.controlCenter.workspaceRoot, selectedWorkspace);
+    assert.equal(
+      normalizePathForAssertion(getPayload.controlCenter.workspaceRoot),
+      normalizePathForAssertion(selectedWorkspace),
+    );
 
     const postResponse = await route.POST(
       new NextRequest(`http://localhost/api/swarm/control-center?workspace=${encodeURIComponent(selectedWorkspace)}`, {
@@ -198,9 +210,13 @@ test("control-center route inspects and updates the selected workspace instead o
     );
     const postPayload = await postResponse.json();
     assert.equal(postResponse.status, 200);
-    assert.equal(postPayload.controlCenter.workspaceRoot, selectedWorkspace);
+    assert.equal(
+      normalizePathForAssertion(postPayload.controlCenter.workspaceRoot),
+      normalizePathForAssertion(selectedWorkspace),
+    );
     assert.match(readFileSync(path.join(selectedWorkspace, ".env.local"), "utf8"), /OPENAI_API_KEY=sk-selected/);
-    assert.equal(existsSync(path.join(projectRoot, ".env.local")), false);
+    const repoEnvLocalAfter = existsSync(repoEnvLocalPath) ? readFileSync(repoEnvLocalPath, "utf8") : null;
+    assert.equal(repoEnvLocalAfter, repoEnvLocalBefore);
   } finally {
     rmSync(selectedWorkspace, { force: true, recursive: true });
   }
