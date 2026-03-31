@@ -29,6 +29,7 @@
     },
     "chatgpt.followUpQueueMode": "steer",
     "workbench.experimental.cloudChanges.partialMatches.enabled": true,
+    "powershell.cwd": "codex-orch-unified",
 
   }
 }

@@ -178,6 +178,13 @@
       "type": "shell",
       "command": "echo ${input:terminateFoundry}",
       "problemMatcher": []
+    },
+    {
+      "type": "markdownlint",
+      "problemMatcher": [
+        "$markdownlint"
+      ],
+      "label": "markdownlint: Lint all Markdown files in the workspace with markdownlint"
     }
   ],
   "inputs": [
