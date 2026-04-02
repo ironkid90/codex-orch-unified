@@ -1,6 +1,7 @@
 """Multi-agent workflow scaffold using Microsoft Agent Framework.
 
-Default mode runs as an HTTP server via azure-ai-agentserver.
+Default mode runs as an HTTP server via azure-ai-agentserver and also exposes
+a lightweight health endpoint for probes.
 Use --cli to run a single local workflow pass in terminal mode.
 """
 
@@ -11,33 +12,21 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from agent_framework import (
-    AgentRunResponseUpdate,
-    AgentRunUpdateEvent,
-    ChatAgent,
-    ChatMessage,
-    Executor,
-    ExecutorFailedEvent,
-    Role,
-    TextContent,
-    WorkflowBuilder,
-    WorkflowContext,
-    WorkflowFailedEvent,
-    WorkflowOutputEvent,
-    WorkflowStatusEvent,
-    handler,
-)
-from agent_framework.azure import AzureAIClient
-from azure.ai.agentserver.agentframework import from_agent_framework
-from azure.identity.aio import DefaultAzureCredential
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    from agent_framework import ChatMessage  # pragma: no cover
+
 
 DEFAULT_ARTIFACT_FILE = Path("batch/out/merged_output.jsonl")
 DEFAULT_MAX_ARTIFACT_CHARS = 5000
+DEFAULT_HEALTH_HOST = "0.0.0.0"
+DEFAULT_HEALTH_PORT = 8081
 
 ROLE_PROMPTS: list[tuple[str, str, str]] = [
     (
@@ -66,6 +55,14 @@ ROLE_PROMPTS: list[tuple[str, str, str]] = [
         "You are QA. Identify edge cases, risks, regressions, and release blockers.",
     ),
 ]
+
+
+@dataclass
+class RoleConfig:
+    executor_id: str
+    agent_name: str
+    instructions: str
+    terminal: bool = False
 
 
 def _safe_json_loads(raw: str) -> dict[str, Any] | None:
@@ -202,7 +199,7 @@ def _message_text(message: Any) -> str:
     return "\n".join(chunks).strip()
 
 
-def _extract_agent_response_text(response: Any) -> str:
+def _extract_agent_response_text(response: Any, role_assistant: Any) -> str:
     text_value = getattr(response, "text", None)
     if isinstance(text_value, str) and text_value.strip():
         return text_value.strip()
@@ -211,7 +208,7 @@ def _extract_agent_response_text(response: Any) -> str:
     if isinstance(messages, list):
         for message in reversed(messages):
             role = getattr(message, "role", None)
-            if role == Role.ASSISTANT or str(role).lower().endswith("assistant"):
+            if role == role_assistant or str(role).lower().endswith("assistant"):
                 message_text = _message_text(message)
                 if message_text:
                     return message_text
@@ -222,87 +219,127 @@ def _extract_agent_response_text(response: Any) -> str:
     return "No model output generated."
 
 
-@dataclass
-class RoleConfig:
-    executor_id: str
-    agent_name: str
-    instructions: str
-    terminal: bool = False
+def _health_payload() -> dict[str, str]:
+    return {
+        "status": "ok",
+        "service": "foundry-workflow-sidecar",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 
-class RoleExecutor(Executor):
-    def __init__(
-        self,
-        client: AzureAIClient,
-        model_deployment: str,
-        config: RoleConfig,
-        shared_context: str,
-    ) -> None:
-        super().__init__(id=config.executor_id)
-        self._client = client
-        self._model_deployment = model_deployment
-        self._config = config
-        self._shared_context = shared_context
-        self._agent: ChatAgent | None = None
+def _build_health_response(method: str, path: str) -> tuple[int, bytes, str]:
+    if method not in {"GET", "HEAD"}:
+        body = json.dumps({"error": "Method not allowed"}).encode("utf-8")
+        return 405, body, "application/json"
 
-    async def _ensure_agent(self) -> ChatAgent:
-        if self._agent is not None:
-            return self._agent
+    if path in {"/health", "/healthz", "/ready", "/readyz"}:
+        body = json.dumps(_health_payload()).encode("utf-8")
+        if method == "HEAD":
+            return 200, b"", "application/json"
+        return 200, body, "application/json"
 
-        instruction_text = self._config.instructions
-        if self._shared_context:
-            instruction_text = (
-                f"{instruction_text}\n\n"
-                "Use the batch artifact context as upstream source-of-truth for PRD/design context:\n"
-                f"{self._shared_context}"
-            )
-
-        kwargs: dict[str, Any] = {
-            "name": self._config.agent_name,
-            "instructions": instruction_text,
-        }
-        if self._model_deployment:
-            kwargs["model"] = self._model_deployment
-
-        try:
-            self._agent = self._client.create_agent(**kwargs)
-        except TypeError:
-            kwargs.pop("model", None)
-            self._agent = self._client.create_agent(**kwargs)
-        return self._agent
-
-    @handler
-    async def run_role(
-        self,
-        messages: list[ChatMessage],
-        ctx: WorkflowContext[list[ChatMessage], str],
-    ) -> None:
-        agent = await self._ensure_agent()
-        response = await agent.run(messages)
-        new_messages = list(messages)
-        response_messages = getattr(response, "messages", None)
-        if isinstance(response_messages, list):
-            new_messages.extend(response_messages)
-
-        if self._config.terminal:
-            output_text = _extract_agent_response_text(response)
-            await ctx.yield_output(output_text)
-            await ctx.add_event(
-                AgentRunUpdateEvent(
-                    self.id,
-                    data=AgentRunResponseUpdate(
-                        contents=[TextContent(text=output_text)],
-                        role=Role.ASSISTANT,
-                        response_id=str(uuid4()),
-                    ),
-                )
-            )
-            return
-
-        await ctx.send_message(new_messages)
+    body = json.dumps({"error": "Not found"}).encode("utf-8")
+    if method == "HEAD":
+        return 404, b"", "application/json"
+    return 404, body, "application/json"
 
 
-def _build_client(endpoint: str) -> AzureAIClient:
+def _http_status_text(status: int) -> str:
+    return {
+        200: "OK",
+        404: "Not Found",
+        405: "Method Not Allowed",
+        500: "Internal Server Error",
+    }.get(status, "OK")
+
+
+async def _handle_health_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    status = 500
+    body = json.dumps({"error": "invalid request"}).encode("utf-8")
+    content_type = "application/json"
+
+    try:
+        raw_request = await reader.read(4096)
+        request_line = raw_request.split(b"\r\n", 1)[0].decode("ascii", errors="ignore")
+        parts = request_line.split()
+        method = parts[0] if len(parts) > 0 else ""
+        raw_path = parts[1] if len(parts) > 1 else "/"
+        path = raw_path.split("?", 1)[0]
+        status, body, content_type = _build_health_response(method=method, path=path)
+    except Exception:
+        status = 500
+        body = json.dumps({"error": "health handler failure"}).encode("utf-8")
+        content_type = "application/json"
+
+    response = [
+        f"HTTP/1.1 {status} {_http_status_text(status)}",
+        f"Content-Type: {content_type}",
+        f"Content-Length: {len(body)}",
+        "Connection: close",
+        "",
+        "",
+    ]
+    writer.write("\r\n".join(response).encode("ascii") + body)
+    await writer.drain()
+    writer.close()
+    await writer.wait_closed()
+
+
+async def start_health_server(host: str, port: int) -> asyncio.base_events.Server:
+    return await asyncio.start_server(_handle_health_client, host=host, port=port)
+
+
+def _resolve_framework_modules() -> dict[str, Any]:
+    try:
+        from agent_framework import (  # type: ignore
+            AgentRunResponseUpdate,
+            AgentRunUpdateEvent,
+            ChatAgent,
+            ChatMessage,
+            Executor,
+            ExecutorFailedEvent,
+            Role,
+            TextContent,
+            WorkflowBuilder,
+            WorkflowContext,
+            WorkflowFailedEvent,
+            WorkflowOutputEvent,
+            WorkflowStatusEvent,
+            handler,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Microsoft Agent Framework is unavailable. Install sidecar dependencies and verify "
+            "the agent framework package versions."
+        ) from exc
+
+    return {
+        "AgentRunResponseUpdate": AgentRunResponseUpdate,
+        "AgentRunUpdateEvent": AgentRunUpdateEvent,
+        "ChatAgent": ChatAgent,
+        "ChatMessage": ChatMessage,
+        "Executor": Executor,
+        "ExecutorFailedEvent": ExecutorFailedEvent,
+        "Role": Role,
+        "TextContent": TextContent,
+        "WorkflowBuilder": WorkflowBuilder,
+        "WorkflowContext": WorkflowContext,
+        "WorkflowFailedEvent": WorkflowFailedEvent,
+        "WorkflowOutputEvent": WorkflowOutputEvent,
+        "WorkflowStatusEvent": WorkflowStatusEvent,
+        "handler": handler,
+    }
+
+
+def _build_client(endpoint: str) -> Any:
+    try:
+        from agent_framework.azure import AzureAIClient  # type: ignore
+        from azure.identity.aio import DefaultAzureCredential  # type: ignore
+    except Exception as exc:
+        raise RuntimeError(
+            "Azure AI client dependencies are unavailable. Install Azure identity + agent framework packages."
+        ) from exc
+
     credential = DefaultAzureCredential()
     if endpoint:
         try:
@@ -312,12 +349,97 @@ def _build_client(endpoint: str) -> AzureAIClient:
     return AzureAIClient(credential=credential)
 
 
-def build_workflow(
-    endpoint: str,
-    model_deployment: str,
-    batch_context: str,
-):
+def _resolve_agentserver_bridge() -> Any:
+    try:
+        from azure.ai.agentserver.agentframework import from_agent_framework  # type: ignore
+    except Exception as exc:
+        raise RuntimeError(
+            "azure-ai-agentserver bridge is unavailable. Install compatible azure-ai-agentserver and related packages."
+        ) from exc
+    return from_agent_framework
+
+
+def build_workflow(endpoint: str, model_deployment: str, batch_context: str) -> tuple[Any, dict[str, Any]]:
+    fw = _resolve_framework_modules()
+
+    AgentRunResponseUpdate = fw["AgentRunResponseUpdate"]
+    AgentRunUpdateEvent = fw["AgentRunUpdateEvent"]
+    ChatAgent = fw["ChatAgent"]
+    Executor = fw["Executor"]
+    Role = fw["Role"]
+    TextContent = fw["TextContent"]
+    WorkflowBuilder = fw["WorkflowBuilder"]
+    handler = fw["handler"]
+
     client = _build_client(endpoint)
+
+    class RoleExecutor(Executor):  # type: ignore[misc]
+        def __init__(
+            self,
+            client_obj: Any,
+            model_name: str,
+            config: RoleConfig,
+            shared_context: str,
+        ) -> None:
+            super().__init__(id=config.executor_id)
+            self._client = client_obj
+            self._model_deployment = model_name
+            self._config = config
+            self._shared_context = shared_context
+            self._agent: Any | None = None
+
+        async def _ensure_agent(self) -> Any:
+            if self._agent is not None:
+                return self._agent
+
+            instruction_text = self._config.instructions
+            if self._shared_context:
+                instruction_text = (
+                    f"{instruction_text}\n\n"
+                    "Use the batch artifact context as upstream source-of-truth for PRD/design context:\n"
+                    f"{self._shared_context}"
+                )
+
+            kwargs: dict[str, Any] = {
+                "name": self._config.agent_name,
+                "instructions": instruction_text,
+            }
+            if self._model_deployment:
+                kwargs["model"] = self._model_deployment
+
+            try:
+                self._agent = self._client.create_agent(**kwargs)
+            except TypeError:
+                kwargs.pop("model", None)
+                self._agent = self._client.create_agent(**kwargs)
+            return self._agent
+
+        @handler  # type: ignore[misc]
+        async def run_role(self, messages: list[Any], ctx: Any) -> None:
+            agent = await self._ensure_agent()
+            response = await agent.run(messages)
+            new_messages = list(messages)
+            response_messages = getattr(response, "messages", None)
+            if isinstance(response_messages, list):
+                new_messages.extend(response_messages)
+
+            if self._config.terminal:
+                output_text = _extract_agent_response_text(response, Role.ASSISTANT)
+                await ctx.yield_output(output_text)
+                await ctx.add_event(
+                    AgentRunUpdateEvent(
+                        self.id,
+                        data=AgentRunResponseUpdate(
+                            contents=[TextContent(text=output_text)],
+                            role=Role.ASSISTANT,
+                            response_id=str(uuid4()),
+                        ),
+                    )
+                )
+                return
+
+            await ctx.send_message(new_messages)
+
     configs = [
         RoleConfig(*ROLE_PROMPTS[0]),
         RoleConfig(*ROLE_PROMPTS[1]),
@@ -330,20 +452,27 @@ def build_workflow(
     builder = WorkflowBuilder().set_start_executor(executors[0])
     for left, right in zip(executors, executors[1:]):
         builder = builder.add_edge(left, right)
-    return builder.build()
+    return builder.build(), fw
 
 
-def _make_initial_messages(prompt: str) -> list[ChatMessage]:
-    return [ChatMessage(role=Role.USER, text=prompt)]
+def _make_initial_messages(prompt: str, fw: dict[str, Any]) -> list[Any]:
+    chat_message_cls = fw["ChatMessage"]
+    role = fw["Role"]
+    return [chat_message_cls(role=role.USER, text=prompt)]
 
 
-async def run_cli(workflow, prompt: str) -> None:
-    async for event in workflow.run_stream(_make_initial_messages(prompt)):
-        if isinstance(event, WorkflowOutputEvent):
+async def run_cli(workflow: Any, prompt: str, fw: dict[str, Any]) -> None:
+    workflow_output_event = fw["WorkflowOutputEvent"]
+    workflow_status_event = fw["WorkflowStatusEvent"]
+    executor_failed_event = fw["ExecutorFailedEvent"]
+    workflow_failed_event = fw["WorkflowFailedEvent"]
+
+    async for event in workflow.run_stream(_make_initial_messages(prompt, fw)):
+        if isinstance(event, workflow_output_event):
             print(f"\nOutput:\n{event.data}\n")
-        elif isinstance(event, WorkflowStatusEvent):
+        elif isinstance(event, workflow_status_event):
             print(f"State: {event.state}")
-        elif isinstance(event, (ExecutorFailedEvent, WorkflowFailedEvent)):
+        elif isinstance(event, (executor_failed_event, workflow_failed_event)):
             details = getattr(event, "details", None)
             message = getattr(details, "message", "Unknown failure")
             print(f"Failure: {message}")
@@ -372,6 +501,22 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_MAX_ARTIFACT_CHARS,
         help="Maximum merged artifact context characters injected into role instructions.",
     )
+    parser.add_argument(
+        "--health-host",
+        default=os.getenv("FOUNDRY_HEALTH_HOST", DEFAULT_HEALTH_HOST),
+        help="Health server bind host (HTTP /health endpoint).",
+    )
+    parser.add_argument(
+        "--health-port",
+        type=int,
+        default=int(os.getenv("FOUNDRY_HEALTH_PORT", str(DEFAULT_HEALTH_PORT))),
+        help="Health server bind port. Set to 0 or --disable-health-endpoint to disable.",
+    )
+    parser.add_argument(
+        "--disable-health-endpoint",
+        action="store_true",
+        help="Disable the lightweight health endpoint.",
+    )
     return parser.parse_args()
 
 
@@ -384,13 +529,28 @@ async def async_main() -> None:
     artifact_file = Path(args.artifact_file)
     batch_context = load_batch_artifact_context(artifact_file, max(1000, args.max_artifact_chars))
 
-    workflow = build_workflow(endpoint, model_deployment, batch_context)
+    workflow, fw = build_workflow(endpoint, model_deployment, batch_context)
+
     if args.cli:
-        await run_cli(workflow, args.prompt)
+        await run_cli(workflow, args.prompt, fw)
         return
 
-    agent = workflow.as_agent()
-    await from_agent_framework(agent).run_async()
+    health_server: asyncio.base_events.Server | None = None
+    try:
+        if not args.disable_health_endpoint and args.health_port > 0:
+            health_server = await start_health_server(args.health_host, args.health_port)
+            sockets = health_server.sockets or []
+            if sockets:
+                sock = sockets[0].getsockname()
+                print(f"Health endpoint listening on http://{sock[0]}:{sock[1]}/health")
+
+        from_agent_framework = _resolve_agentserver_bridge()
+        agent = workflow.as_agent()
+        await from_agent_framework(agent).run_async()
+    finally:
+        if health_server is not None:
+            health_server.close()
+            await health_server.wait_closed()
 
 
 if __name__ == "__main__":

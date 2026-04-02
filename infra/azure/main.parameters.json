@@ -1,0 +1,58 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "acrName": {
+      "value": "${AZURE_ACR_NAME}"
+    },
+    "containerAppsEnvironmentName": {
+      "value": "${AZURE_CONTAINERAPPS_ENV_NAME}"
+    },
+    "webAppName": {
+      "value": "${AZURE_WEB_APP_NAME}"
+    },
+    "workerAppName": {
+      "value": "${AZURE_WORKER_APP_NAME}"
+    },
+    "foundryAppName": {
+      "value": "${AZURE_FOUNDRY_APP_NAME}"
+    },
+    "deployFoundry": {
+      "value": "${AZURE_DEPLOY_FOUNDRY}"
+    },
+    "appInsightsName": {
+      "value": "${AZURE_APPINSIGHTS_NAME}"
+    },
+    "logAnalyticsWorkspaceName": {
+      "value": "${AZURE_LOG_ANALYTICS_NAME}"
+    },
+    "storageAccountName": {
+      "value": "${AZURE_STORAGE_ACCOUNT_NAME}"
+    },
+    "keyVaultName": {
+      "value": "${AZURE_KEY_VAULT_NAME}"
+    },
+    "redisName": {
+      "value": "${AZURE_REDIS_NAME}"
+    },
+    "postgresServerName": {
+      "value": "${AZURE_POSTGRES_SERVER_NAME}"
+    },
+    "postgresDatabaseName": {
+      "value": "${AZURE_POSTGRES_DB_NAME}"
+    },
+    "postgresAdminLogin": {
+      "value": "${AZURE_POSTGRES_ADMIN_LOGIN}"
+    },
+    "postgresAdminPassword": {
+      "value": "${AZURE_POSTGRES_ADMIN_PASSWORD}"
+    }
+  }
+}
+

@@ -219,8 +219,10 @@ function printUsage(): void {
   console.log("  resume                      Resume the active swarm runner");
   console.log("  rewind <round>              Rewind to a checkpoint (run must be paused)");
   console.log("      [--round N]");
-  console.log("  deploy [--path PATH]        One-click Vercel preview deploy");
-  console.log("      [--prod]");
+  console.log("  deploy [--target azure|vercel]");
+  console.log("      Azure is the default target and runs `azd deploy` from the repo root.");
+  console.log("      Use --environment NAME to select an azd environment and --provision to run `azd provision` first.");
+  console.log("      Use --target vercel [--path PATH] [--prod] for the optional demo deploy path.");
 }
 
 async function ensureVercelAuth(ask?: (q: string) => Promise<string>): Promise<boolean> {
@@ -240,6 +242,30 @@ async function ensureVercelAuth(ask?: (q: string) => Promise<string>): Promise<b
   }
 
   const login = await runCommand("npx", ["vercel", "login"], { inherit: true });
+  return login.code === 0;
+}
+
+async function ensureAzureAuth(ask?: (q: string) => Promise<string>): Promise<boolean> {
+  const azdVersion = await runCommand("azd", ["version"]);
+  if (azdVersion.code !== 0) {
+    throw new Error("Azure Developer CLI (`azd`) is required for Azure deploys.");
+  }
+
+  const account = await runCommand("az", ["account", "show"]);
+  if (account.code === 0) {
+    return true;
+  }
+
+  if (!ask) {
+    return false;
+  }
+
+  const doLogin = await askYesNo(ask, "Azure CLI is not authenticated. Run `azd auth login` now?");
+  if (!doLogin) {
+    return false;
+  }
+
+  const login = await runCommand("azd", ["auth", "login"], { inherit: true });
   return login.code === 0;
 }
 
@@ -680,6 +706,44 @@ async function runCommandInteractive(flags: Map<string, string | boolean>): Prom
 }
 
 async function deployCommand(flags: Map<string, string | boolean>): Promise<void> {
+  const target = flagString(flags, "target", "azure").toLowerCase();
+  if (target !== "azure" && target !== "vercel") {
+    throw new Error(`Unsupported deploy target: ${target}. Use azure or vercel.`);
+  }
+
+  if (target === "azure") {
+    const environmentName = flagString(flags, "environment", "");
+    const provisionFirst = flagBoolean(flags, "provision", false);
+    const prompt = createPrompter();
+    const azureReady = await ensureAzureAuth(prompt.ask);
+    prompt.close();
+    if (!azureReady) {
+      throw new Error("Azure authentication is required for Azure deploy.");
+    }
+
+    if (environmentName) {
+      const envSelect = await runCommand("azd", ["env", "select", environmentName], { inherit: true });
+      if (envSelect.code !== 0) {
+        throw new Error(`Failed to select azd environment "${environmentName}".`);
+      }
+    }
+
+    if (provisionFirst) {
+      console.log("Provisioning Azure resources with azd...");
+      const provision = await runCommand("azd", ["provision"], { inherit: true });
+      if (provision.code !== 0) {
+        throw new Error("azd provision failed.");
+      }
+    }
+
+    console.log("Deploying to Azure Container Apps with azd...");
+    const deploy = await runCommand("azd", ["deploy"], { inherit: true });
+    if (deploy.code !== 0) {
+      throw new Error("azd deploy failed.");
+    }
+    return;
+  }
+
   const pathArg = flagString(flags, "path", ROOT);
   const deployPath = path.resolve(pathArg);
   const isProd = flagBoolean(flags, "prod", false);

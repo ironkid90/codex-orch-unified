@@ -1,0 +1,25 @@
+name: codex-orch-unified
+metadata:
+  template: codex-orch-unified-containerapps-weu
+infra:
+  provider: bicep
+  path: infra/azure
+services:
+  web:
+    project: .
+    language: js
+    host: containerapp
+    docker:
+      path: Dockerfile
+  worker:
+    project: .
+    language: js
+    host: containerapp
+    docker:
+      path: Dockerfile
+  foundry:
+    project: .
+    language: py
+    host: containerapp
+    docker:
+      path: deploy/docker/Dockerfile.foundry

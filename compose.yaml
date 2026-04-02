@@ -4,7 +4,19 @@ services:
     build:
       context: .
       dockerfile: ./Dockerfile
+      args:
+        APP_ROLE: web
     environment:
       NODE_ENV: production
     ports:
       - 3017:3017
+  codexorchworker:
+    image: codexorchworker
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+      args:
+        APP_ROLE: worker
+    environment:
+      NODE_ENV: production
+      APP_ROLE: worker

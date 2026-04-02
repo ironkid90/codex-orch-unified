@@ -18,6 +18,8 @@ Additional optional sidecar: Microsoft Agent Framework workflow in `foundry_agen
 - API control endpoints (`app/api/swarm/*`)
 - Terminal control surface (`scripts/swarm-cli.ts`)
 - File-backed runtime state (`runs/_runtime/current-state.json`)
+- Optional Azure-backed runtime durability (Postgres + Redis + Blob) for Container Apps web/worker split
+- Health endpoints for the web app (`/api/health`) and optional Foundry sidecar (`/health`)
 - File-backed pause/resume/rewind requests (`runs/_runtime/control-queue`)
 - Checkpoints and round artifacts under `runs/`
 - Provider/model routing from `config/model-routing.json`
@@ -46,7 +48,7 @@ What is not implemented yet:
 
 - ADK Python sidecar HTTP server (the client adapter is ready, but `adk_prototype/` needs to expose the matching HTTP API)
 - No graph DSL executor wired into the active runtime
-- No durable multi-user job queue or remote worker pool
+- No AKS-native GitOps/workflow/model-serving lane yet (that is the planned phase-2 path)
 - No full CI/test hardening for the orchestration layer
 
 ## Quick Start
@@ -129,8 +131,31 @@ PowerShell entrypoint equivalents:
 - CLI only: `npm run swarm:run -- --mode local --max-rounds 3`
 - Optional Foundry sidecar only: `npm run dev:foundry`
 - Dashboard + Foundry sidecar: `npm run dev:all`
+- Azure worker loop: `npm run swarm:worker`
 
 The Foundry path is optional and does not power the primary Codex swarm loop.
+
+## Azure Container Apps Baseline
+
+The primary remote deployment path is now Azure Container Apps in West Europe.
+
+- Local dev keeps the existing file-backed runtime.
+- Remote deployments can switch to `SWARM_PERSISTENCE_BACKEND=azure` and split execution across:
+  - `web` Container App
+  - `worker` Container App
+  - optional `foundry` Container App
+- Azure-backed state uses:
+  - PostgreSQL for runtime state snapshots and run history
+  - Redis for queued worker start requests
+  - Blob Storage for large offloaded artifacts
+
+Key docs and assets:
+
+- `docs/AZURE_CONTAINER_APPS_BASELINE.md`
+- `azure.yaml`
+- `infra/azure/main.bicep`
+- `.github/workflows/provision-azure-west-europe.yml`
+- `.github/workflows/deploy-azure-west-europe.yml`
 
 ## Auth And Compatibility Notes
 
@@ -426,20 +451,30 @@ VS Code debugging:
 - Launch configs added in `.vscode/launch.json`:
   - `Orch: Debug Agent HTTP (Inspector)`
 
-## Vercel
+## Deployment
 
-Deploy as a standard Next.js project.
-
-One-click preview deploy:
+Azure is the default deploy target:
 
 ```bash
 npm run swarm:deploy
 ```
 
+Provision infrastructure first when needed:
+
+```bash
+npm run swarm:deploy -- --environment <azd-env> --provision
+```
+
+Use the optional Vercel demo deploy path when you specifically want a preview-style dashboard deployment:
+
+```bash
+npm run swarm:deploy -- --target vercel
+```
+
 Production deploy (explicit):
 
 ```bash
-npm run swarm:deploy -- --prod
+npm run swarm:deploy -- --target vercel --prod
 ```
 
 - On Vercel, the app defaults to `demo` mode for safe execution.

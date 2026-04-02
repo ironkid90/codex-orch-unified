@@ -53,7 +53,19 @@ import {
   enqueueControlRequest,
   readQueuedControlRequests,
   type ControlAction,
+  type QueuedControlRequest,
 } from "./runtime-state";
+import {
+  clearRemoteControlRequests,
+  completeRemoteControlRequest,
+  enqueueRemoteControlRequest,
+  listRemoteControlRequests,
+} from "./azure-persistence";
+import {
+  isAzurePersistenceEnabled,
+  isWorkerExecutionRole,
+  usesRemoteControlPlane,
+} from "./azure-contract";
 import { buildSwarmCodexEnvironment, ensureSwarmCodexHome } from "./codex-home";
 import { swarmStore } from "./store";
 import { AGENT_IDS } from "./types";
@@ -391,8 +403,52 @@ function describeControlSource(source?: string): string {
   return source ? `from ${source}` : "from the external control plane";
 }
 
+type RuntimeQueuedControlRequest =
+  | QueuedControlRequest
+  | {
+      id: string;
+      action: ControlAction;
+      requestedAt: string;
+      source?: string;
+      reason?: string;
+      round?: number;
+    };
+
+function isLocalControlRequest(request: RuntimeQueuedControlRequest): request is QueuedControlRequest {
+  return "filePath" in request;
+}
+
+async function listQueuedControlRequestsForRunner(): Promise<RuntimeQueuedControlRequest[]> {
+  if (isAzurePersistenceEnabled() && isWorkerExecutionRole()) {
+    return listRemoteControlRequests();
+  }
+  return readQueuedControlRequests();
+}
+
+async function completeQueuedControlRequestForRunner(
+  request: RuntimeQueuedControlRequest,
+  result: {
+    ok: boolean;
+    message: string;
+    metadata?: Record<string, unknown>;
+  },
+): Promise<void> {
+  if (isLocalControlRequest(request)) {
+    completeControlRequest(request, result);
+    return;
+  }
+  await completeRemoteControlRequest(request.id, result);
+}
+
+async function clearQueuedControlRequestsForRunner(): Promise<void> {
+  clearQueuedControlRequests();
+  if (isAzurePersistenceEnabled()) {
+    await clearRemoteControlRequests();
+  }
+}
+
 async function processQueuedControlRequests(round: number): Promise<void> {
-  const queuedRequests = readQueuedControlRequests();
+  const queuedRequests = await listQueuedControlRequestsForRunner();
   for (const request of queuedRequests) {
     try {
       const sourceLabel = describeControlSource(request.source);
@@ -401,12 +457,16 @@ async function processQueuedControlRequests(round: number): Promise<void> {
         const message = ok
           ? `Pause applied ${sourceLabel}.`
           : "Pause request ignored because the run is already paused or human-in-the-loop is disabled.";
-        completeControlRequest(request, {
+        await completeQueuedControlRequestForRunner(request, {
           ok,
           message,
           metadata: { round, action: request.action, source: request.source },
         });
-        swarmStore.refreshPendingControls(true);
+        if (isAzurePersistenceEnabled()) {
+          await swarmStore.syncFromRemote();
+        } else {
+          swarmStore.refreshPendingControls(true);
+        }
         if (ok) {
           swarmStore.appendEvent({
             type: "run.control",
@@ -422,12 +482,16 @@ async function processQueuedControlRequests(round: number): Promise<void> {
       if (request.action === "resume") {
         const ok = resumeSwarmRun();
         const message = ok ? `Resume applied ${sourceLabel}.` : "Resume request ignored because the run is not paused.";
-        completeControlRequest(request, {
+        await completeQueuedControlRequestForRunner(request, {
           ok,
           message,
           metadata: { round, action: request.action, source: request.source },
         });
-        swarmStore.refreshPendingControls(true);
+        if (isAzurePersistenceEnabled()) {
+          await swarmStore.syncFromRemote();
+        } else {
+          swarmStore.refreshPendingControls(true);
+        }
         if (ok) {
           swarmStore.appendEvent({
             type: "run.control",
@@ -445,7 +509,7 @@ async function processQueuedControlRequests(round: number): Promise<void> {
       }
       const rewind = await rewindSwarmToRound(Math.max(1, Math.floor(requestedRound)));
       const message = `Rewind to round ${rewind.round} applied ${sourceLabel}.`;
-      completeControlRequest(request, {
+      await completeQueuedControlRequestForRunner(request, {
         ok: true,
         message,
         metadata: {
@@ -456,7 +520,11 @@ async function processQueuedControlRequests(round: number): Promise<void> {
           targetRound: rewind.round,
         },
       });
-      swarmStore.refreshPendingControls(true);
+      if (isAzurePersistenceEnabled()) {
+        await swarmStore.syncFromRemote();
+      } else {
+        swarmStore.refreshPendingControls(true);
+      }
       swarmStore.appendEvent({
         type: "run.control",
         round,
@@ -472,12 +540,16 @@ async function processQueuedControlRequests(round: number): Promise<void> {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      completeControlRequest(request, {
+      await completeQueuedControlRequestForRunner(request, {
         ok: false,
         message,
         metadata: { round, action: request.action, source: request.source },
       });
-      swarmStore.refreshPendingControls(true);
+      if (isAzurePersistenceEnabled()) {
+        await swarmStore.syncFromRemote();
+      } else {
+        swarmStore.refreshPendingControls(true);
+      }
       const state = swarmStore.getState();
       if (state.runId) {
         swarmStore.appendEvent({
@@ -2978,6 +3050,7 @@ export async function requestSwarmControl(input: {
 }): Promise<ControlRequestResult> {
   const state = swarmStore.getState();
   const localRunActive = Boolean(activeRunPromise);
+  const remoteControlPlane = usesRemoteControlPlane();
 
   if (input.action === "pause") {
     if (localRunActive && canApplyControlImmediately(state)) {
@@ -2990,8 +3063,14 @@ export async function requestSwarmControl(input: {
       };
     }
     if (state.running) {
-      const requestId = enqueueControlRequest(input);
-      swarmStore.refreshPendingControls(true);
+      const requestId = remoteControlPlane
+        ? await enqueueRemoteControlRequest(input)
+        : enqueueControlRequest(input);
+      if (remoteControlPlane) {
+        await swarmStore.syncFromRemote();
+      } else {
+        swarmStore.refreshPendingControls(true);
+      }
       const stepLabel = state.activity.activeStep || state.activity.activeGate || "the current step";
       return {
         ok: true,
@@ -3028,8 +3107,14 @@ export async function requestSwarmControl(input: {
       };
     }
     if (state.running) {
-      const requestId = enqueueControlRequest(input);
-      swarmStore.refreshPendingControls(true);
+      const requestId = remoteControlPlane
+        ? await enqueueRemoteControlRequest(input)
+        : enqueueControlRequest(input);
+      if (remoteControlPlane) {
+        await swarmStore.syncFromRemote();
+      } else {
+        swarmStore.refreshPendingControls(true);
+      }
       return {
         ok: true,
         queued: true,
@@ -3094,13 +3179,24 @@ export async function requestSwarmControl(input: {
     };
   }
 
-  const requestId = enqueueControlRequest({
-    action: input.action,
-    reason: input.reason,
-    round: normalizedRound,
-    source: input.source,
-  });
-  swarmStore.refreshPendingControls(true);
+  const requestId = remoteControlPlane
+    ? await enqueueRemoteControlRequest({
+        action: input.action,
+        reason: input.reason,
+        round: normalizedRound,
+        source: input.source,
+      })
+    : enqueueControlRequest({
+        action: input.action,
+        reason: input.reason,
+        round: normalizedRound,
+        source: input.source,
+      });
+  if (remoteControlPlane) {
+    await swarmStore.syncFromRemote();
+  } else {
+    swarmStore.refreshPendingControls(true);
+  }
   return {
     ok: true,
     queued: true,
@@ -3133,7 +3229,9 @@ export function startSwarmRun(options: StartOptions = {}): StartResult {
     const maxRounds = clampRounds(options.maxRounds);
     const workspace = path.resolve(options.workspace || PROJECT_ROOT);
     const mode = resolveRunMode(options.mode);
-    clearQueuedControlRequests();
+    void clearQueuedControlRequestsForRunner().catch((error) => {
+      console.warn("[SwarmEngine] Failed to clear queued control requests before start:", error);
+    });
     swarmStore.refreshPendingControls(false);
     tokenTracker.reset();
     const runId = swarmStore.startRun({

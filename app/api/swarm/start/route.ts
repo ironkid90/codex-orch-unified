@@ -4,9 +4,16 @@ import { inspectControlCenter } from "@/lib/swarm/control-center";
 import { resolveDashboardWorkspace } from "@/lib/swarm/dashboard-workspaces";
 import { getRuntime } from "@/lib/swarm/runtime";
 import { swarmStore } from "@/lib/swarm/store";
+import {
+  isAzurePersistenceEnabled,
+  shouldQueueStartRequests,
+  type QueuedSwarmStartRequest,
+} from "@/lib/swarm/azure-contract";
+import { enqueueSwarmStartRequest } from "@/lib/swarm/azure-persistence";
 import type { RunMode, SwarmFeatures } from "@/lib/swarm/types";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 interface StartPayload {
   maxRounds?: number;
@@ -18,7 +25,9 @@ interface StartPayload {
 
 export async function POST(request: Request) {
   const runtime = await getRuntime();
-  const currentState = swarmStore.getState();
+  const currentState = isAzurePersistenceEnabled()
+    ? await swarmStore.syncFromRemote()
+    : swarmStore.getState();
   if (currentState.running || runtime.getActiveRunPromise()) {
     return NextResponse.json(
       {
@@ -72,6 +81,28 @@ export async function POST(request: Request) {
   }
 
   try {
+    if (shouldQueueStartRequests()) {
+      const queuedRequest: QueuedSwarmStartRequest = {
+        requestedAt: new Date().toISOString(),
+        workspace: workspaceRoot,
+        maxRounds: payload.maxRounds,
+        mode: payload.mode,
+        features: payload.features,
+        prompt: payload.prompt,
+        source: "dashboard",
+      };
+      await enqueueSwarmStartRequest(queuedRequest);
+      return NextResponse.json(
+        {
+          ok: true,
+          queued: true,
+          message: "Swarm start request queued for the worker.",
+          request: queuedRequest,
+        },
+        { status: 202 },
+      );
+    }
+
     const result = await runtime.startRun({
       maxRounds: payload.maxRounds,
       workspace: workspaceRoot,

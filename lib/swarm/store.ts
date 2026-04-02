@@ -23,6 +23,13 @@ import {
   type SwarmRuntimeActivity,
 } from "./types";
 import { loadPersistedRuntimeState, persistRuntimeState, snapshotQueuedControlRequests } from "./runtime-state";
+import {
+  loadRuntimeStateFromAzure,
+  mirrorRuntimeStateToAzure,
+  snapshotRemoteControlRequests,
+  uploadArtifactToAzure,
+} from "./azure-persistence";
+import { isAzurePersistenceEnabled } from "./azure-contract";
 
 const MAX_EVENTS = 500;
 
@@ -113,12 +120,35 @@ class SwarmStore {
     return cloneState(this.state);
   }
 
+  async syncFromRemote(): Promise<SwarmRunState> {
+    if (!isAzurePersistenceEnabled()) {
+      return this.getState();
+    }
+
+    const [remoteState, remotePendingControls] = await Promise.all([
+      loadRuntimeStateFromAzure(),
+      snapshotRemoteControlRequests(),
+    ]);
+
+    if (remoteState) {
+      this.state = normalizeState(remoteState);
+      const maxEventId = this.state.events.reduce((highest, event) => Math.max(highest, event.id), 0);
+      this.eventCounter = Math.max(this.eventCounter, maxEventId);
+    }
+    this.state.pendingControls = remotePendingControls;
+    return cloneState(this.state);
+  }
+
   subscribe(listener: (event: SwarmEvent) => void): () => void {
     this.emitter.on("event", listener);
     return () => this.emitter.off("event", listener);
   }
 
   refreshPendingControls(emit = false): void {
+    if (isAzurePersistenceEnabled()) {
+      return;
+    }
+
     const nextPendingControls = snapshotQueuedControlRequests();
     const changed = JSON.stringify(this.state.pendingControls) !== JSON.stringify(nextPendingControls);
     if (!changed) {
@@ -356,6 +386,20 @@ class SwarmStore {
       
       message.summary = `[Context Offloaded] Content saved to: ${filePath}`;
       message.artifactPath = filePath;
+
+      if (isAzurePersistenceEnabled()) {
+        void uploadArtifactToAzure(filePath, this.state.runId)
+          .then((artifactUrl) => {
+            if (!artifactUrl) {
+              return;
+            }
+            message.artifactPath = artifactUrl;
+            this.persistSnapshot();
+          })
+          .catch((error) => {
+            console.warn("[SwarmStore] Failed to offload artifact to Azure Blob:", error);
+          });
+      }
     }
 
     this.state.messages.push(message);
@@ -367,6 +411,9 @@ class SwarmStore {
 
   setIoCoordinator(snapshot: IoCoordinatorSnapshot): void {
     this.state.ioCoordinator = snapshot;
+    if (!this.state.runId && !this.state.running) {
+      return;
+    }
     this.persistSnapshot();
     if (this.state.running && this.state.runId) {
       this.emitTransientStateUpdate("io.updated");
@@ -422,6 +469,11 @@ class SwarmStore {
 
   private persistSnapshot(): void {
     persistRuntimeState(this.state);
+    if (isAzurePersistenceEnabled()) {
+      void mirrorRuntimeStateToAzure(this.state).catch((error) => {
+        console.warn("[SwarmStore] Failed to mirror runtime state to Azure:", error);
+      });
+    }
   }
 }
 

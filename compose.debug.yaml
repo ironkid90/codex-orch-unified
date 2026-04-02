@@ -4,9 +4,22 @@ services:
     build:
       context: .
       dockerfile: ./Dockerfile
+      args:
+        APP_ROLE: web
     environment:
       NODE_ENV: development
     ports:
       - 3017:3017
       - 9229:9229
-    command: ["node", "--inspect=0.0.0.0:9229", "index.js"]
+    command: ["node", "--inspect=0.0.0.0:9229", "./node_modules/next/dist/bin/next", "start", "--port", "3017"]
+  codexorchworker:
+    image: codexorchworker
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+      args:
+        APP_ROLE: worker
+    environment:
+      NODE_ENV: development
+      APP_ROLE: worker
+    command: ["npm", "run", "swarm:worker", "--", "--once"]

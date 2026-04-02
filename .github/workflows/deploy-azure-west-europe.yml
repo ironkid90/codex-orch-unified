@@ -1,0 +1,115 @@
+name: Deploy Azure Container Apps (West Europe)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: azure-deploy-weu
+  cancel-in-progress: true
+
+env:
+  AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+  AZURE_ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
+  AZURE_WEB_APP_NAME: ${{ secrets.AZURE_WEB_APP_NAME }}
+  AZURE_WORKER_APP_NAME: ${{ secrets.AZURE_WORKER_APP_NAME }}
+  AZURE_FOUNDRY_APP_NAME: ${{ secrets.AZURE_FOUNDRY_APP_NAME }}
+  DEPLOY_FOUNDRY: ${{ secrets.AZURE_DEPLOY_FOUNDRY }}
+  WEB_TARGET_PORT: "3017"
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: azure-prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve ACR login server
+        id: acr
+        run: |
+          LOGIN_SERVER=$(az acr show -n "$AZURE_ACR_NAME" --query loginServer -o tsv)
+          echo "login_server=$LOGIN_SERVER" >> "$GITHUB_OUTPUT"
+
+      - name: ACR docker login via Azure identity
+        run: az acr login --name "$AZURE_ACR_NAME"
+
+      - name: Set image tags
+        id: images
+        run: |
+          SHA_TAG="${GITHUB_SHA}"
+          LOGIN_SERVER="${{ steps.acr.outputs.login_server }}"
+          echo "web=$LOGIN_SERVER/codex-orch-web:$SHA_TAG" >> "$GITHUB_OUTPUT"
+          echo "worker=$LOGIN_SERVER/codex-orch-worker:$SHA_TAG" >> "$GITHUB_OUTPUT"
+          echo "foundry=$LOGIN_SERVER/codex-orch-foundry:$SHA_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push web image
+        run: |
+          docker build --build-arg APP_ROLE=web -f Dockerfile -t "${{ steps.images.outputs.web }}" .
+          docker push "${{ steps.images.outputs.web }}"
+
+      - name: Build and push worker image
+        run: |
+          docker build --build-arg APP_ROLE=worker -f Dockerfile -t "${{ steps.images.outputs.worker }}" .
+          docker push "${{ steps.images.outputs.worker }}"
+
+      - name: Build and push foundry image
+        if: env.DEPLOY_FOUNDRY == 'true'
+        run: |
+          docker build -f deploy/docker/Dockerfile.foundry -t "${{ steps.images.outputs.foundry }}" .
+          docker push "${{ steps.images.outputs.foundry }}"
+
+      - name: Deploy web container app revision
+        run: |
+          az containerapp update \
+            --name "$AZURE_WEB_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image "${{ steps.images.outputs.web }}" \
+            --ingress external \
+            --target-port "$WEB_TARGET_PORT" \
+            --set-env-vars APP_ROLE=web SWARM_EXECUTION_ROLE=web SWARM_EXECUTION_TRANSPORT=redis IMAGE_TAG="${GITHUB_SHA}"
+
+      - name: Deploy worker container app revision
+        run: |
+          az containerapp update \
+            --name "$AZURE_WORKER_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image "${{ steps.images.outputs.worker }}" \
+            --set-env-vars APP_ROLE=worker SWARM_EXECUTION_ROLE=worker SWARM_EXECUTION_TRANSPORT=redis IMAGE_TAG="${GITHUB_SHA}"
+
+      - name: Deploy optional foundry container app revision
+        if: env.DEPLOY_FOUNDRY == 'true'
+        run: |
+          az containerapp update \
+            --name "$AZURE_FOUNDRY_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image "${{ steps.images.outputs.foundry }}" \
+            --set-env-vars APP_ROLE=web SWARM_EXECUTION_ROLE=all IMAGE_TAG="${GITHUB_SHA}"
+
+      - name: Smoke checks (revision + endpoint + logs)
+        run: |
+          WEB_FQDN=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEB_APP_NAME" --query properties.configuration.ingress.fqdn -o tsv)
+          ACTIVE_REVISION=$(az containerapp revision list -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEB_APP_NAME" --query "[?properties.active].name | [0]" -o tsv)
+          echo "Web FQDN: https://$WEB_FQDN"
+          echo "Active revision: $ACTIVE_REVISION"
+
+          if ! curl -fsS --max-time 20 "https://$WEB_FQDN/api/health" > /dev/null; then
+            curl -fsS --max-time 20 "https://$WEB_FQDN/" > /dev/null
+          fi
+
+          az containerapp logs show \
+            --name "$AZURE_WEB_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --tail 50

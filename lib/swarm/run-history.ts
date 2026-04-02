@@ -2,6 +2,14 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
+import { isAzurePersistenceEnabled } from "./azure-contract";
+import {
+  getRunHistoryAnalyticsFromAzure,
+  getRunHistoryFromAzure,
+  listRunHistoryFromAzure,
+  saveRunHistoryToAzure,
+} from "./azure-persistence";
+
 const HISTORY_DIR = path.join(process.cwd(), "runs", "history");
 
 export const AgentMetricSchema = z.object({
@@ -104,4 +112,39 @@ export const fileRunHistoryStore: RunHistoryStore = {
   },
 
   async exportAll() { return this.list(10000); },
+};
+
+export const runHistoryStore: RunHistoryStore = {
+  async save(entry) {
+    if (isAzurePersistenceEnabled()) {
+      await saveRunHistoryToAzure(entry);
+      return;
+    }
+    await fileRunHistoryStore.save(entry);
+  },
+
+  async getById(runId) {
+    if (isAzurePersistenceEnabled()) {
+      return getRunHistoryFromAzure(runId);
+    }
+    return fileRunHistoryStore.getById(runId);
+  },
+
+  async list(limit = 50) {
+    if (isAzurePersistenceEnabled()) {
+      return listRunHistoryFromAzure(limit);
+    }
+    return fileRunHistoryStore.list(limit);
+  },
+
+  async getAnalytics() {
+    if (isAzurePersistenceEnabled()) {
+      return getRunHistoryAnalyticsFromAzure();
+    }
+    return fileRunHistoryStore.getAnalytics();
+  },
+
+  async exportAll() {
+    return this.list(10_000);
+  },
 };

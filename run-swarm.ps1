@@ -11,6 +11,9 @@ param(
   [switch]$Resume,
   [switch]$Deploy,
   [switch]$Prod,
+  [ValidateSet("azure", "vercel")]
+  [string]$DeployTarget = "azure",
+  [string]$Environment = "",
   [switch]$Legacy
 )
 
@@ -48,12 +51,18 @@ if ($RewindRound -gt 0) {
 }
 
 if ($Deploy) {
-    $deployArgs = @("run", "swarm:deploy", "--")
-    if (-not [string]::IsNullOrWhiteSpace($Workspace)) {
-        $deployArgs += @("--path", $Workspace)
-    }
-    if ($Prod) {
-        $deployArgs += "--prod"
+    $deployArgs = @("run", "swarm:deploy", "--", "--target", $DeployTarget)
+    if ($DeployTarget -eq "azure") {
+        if (-not [string]::IsNullOrWhiteSpace($Environment)) {
+            $deployArgs += @("--environment", $Environment)
+        }
+    } else {
+        if (-not [string]::IsNullOrWhiteSpace($Workspace)) {
+            $deployArgs += @("--path", $Workspace)
+        }
+        if ($Prod) {
+            $deployArgs += "--prod"
+        }
     }
 
     npm @deployArgs

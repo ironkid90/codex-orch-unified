@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 
+import { isAzurePersistenceEnabled } from "@/lib/swarm/azure-contract";
 import { getRuntime } from "@/lib/swarm/runtime";
 import type { ControlAction } from "@/lib/swarm/runtime";
+import { swarmStore } from "@/lib/swarm/store";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 interface ControlPayload {
   action?: ControlAction;
@@ -25,6 +28,9 @@ export async function POST(request: Request) {
   }
 
   try {
+    if (isAzurePersistenceEnabled()) {
+      await swarmStore.syncFromRemote();
+    }
     const runtime = await getRuntime();
     const result = await runtime.requestControl({
       action,

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { fileRunHistoryStore } from "@/lib/swarm/run-history";
+import { runHistoryStore } from "@/lib/swarm/run-history";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
     const limit = Math.min(Math.max(parseInt(request.nextUrl.searchParams.get("limit") ?? "50", 10) || 50, 1), 100);
 
     if (runId) {
-      const entry = await fileRunHistoryStore.getById(runId);
+      const entry = await runHistoryStore.getById(runId);
       if (!entry) {
         return NextResponse.json({ error: `Run "${runId}" not found in history.` }, { status: 404 });
       }
@@ -26,11 +26,11 @@ export async function GET(request: NextRequest) {
     }
 
     if (analytics) {
-      const analyticsData = await fileRunHistoryStore.getAnalytics();
+      const analyticsData = await runHistoryStore.getAnalytics();
       return NextResponse.json({ analytics: analyticsData });
     }
 
-    const entries = await fileRunHistoryStore.list(limit);
+    const entries = await runHistoryStore.list(limit);
     return NextResponse.json({
       entries,
       count: entries.length,
