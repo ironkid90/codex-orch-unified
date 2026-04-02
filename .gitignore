@@ -78,3 +78,4 @@ compile_errors.txt
 *.sqlite3
 ${SQLITE_DB_PATH}
 *.exe
+.azure
