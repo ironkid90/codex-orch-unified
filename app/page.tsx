@@ -120,8 +120,13 @@ export default function HomePage() {
   const [prompt, setPrompt] = useState("");
   const workspaceSelection = useWorkspaceSelection();
   const layout = useDashboardLayoutState();
-  const dashboardData = useSwarmDashboardData({ selectedAgentId: layout.selectedAgentId });
-  const dashboardStream = useSwarmDashboardStream();
+  const dashboardData = useSwarmDashboardData({
+    selectedAgentId: layout.selectedAgentId,
+    workspace: workspaceSelection.selectedWorkspace,
+  });
+  const dashboardStream = useSwarmDashboardStream({
+    url: buildWorkspaceScopedUrl("/api/swarm/stream", workspaceSelection.selectedWorkspace),
+  });
   const providerInventory = useProviderAuthInventory(true, workspaceSelection.selectedWorkspace);
 
   const dashboard = useMemo(

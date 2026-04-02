@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { CommitDraft, GitChangeSet } from "@/app/lib/dashboard/cockpit-view-model";
 import type { SwarmRunState } from "@/lib/swarm/types";
@@ -15,6 +15,22 @@ interface GitStatusPayload {
   }>;
 }
 
+interface GitDiffPayload {
+  diff?: {
+    filePath?: string;
+    mode?: "staged" | "unstaged";
+    patch?: string;
+    truncated?: boolean;
+  };
+}
+
+export interface GitDiffPreview {
+  filePath: string | null;
+  mode: "staged" | "unstaged" | null;
+  patch: string;
+  truncated: boolean;
+}
+
 interface UseCockpitGitSurfaceOptions {
   workspace?: string | null;
   state: SwarmRunState | null;
@@ -27,8 +43,14 @@ export interface CockpitGitSurfaceState {
   error: string | null;
   changeSet: GitChangeSet;
   commitDraft: CommitDraft;
+  selectedDiffPath: string | null;
+  diffStatus: "idle" | "loading" | "ready" | "unavailable" | "error";
+  diffError: string | null;
+  diffPreview: GitDiffPreview | null;
   refresh: () => Promise<void>;
   updateDraft: (draft: CommitDraft) => void;
+  selectDiffPath: (filePath: string | null) => void;
+  refreshDiff: (filePath?: string | null) => Promise<void>;
   commit: () => Promise<{ ok: boolean; message: string }>;
 }
 
@@ -64,6 +86,29 @@ export function normalizeGitStatusPayload(payload: unknown): GitChangeSet | null
   };
 }
 
+export function normalizeGitDiffPayload(payload: unknown): GitDiffPreview | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const parsed = payload as GitDiffPayload;
+  if (!parsed.diff || typeof parsed.diff !== "object") {
+    return null;
+  }
+
+  const patch = typeof parsed.diff.patch === "string" ? parsed.diff.patch : null;
+  if (patch === null) {
+    return null;
+  }
+
+  return {
+    filePath: typeof parsed.diff.filePath === "string" ? parsed.diff.filePath : null,
+    mode: parsed.diff.mode === "staged" || parsed.diff.mode === "unstaged" ? parsed.diff.mode : null,
+    patch,
+    truncated: Boolean(parsed.diff.truncated),
+  };
+}
+
 export function deriveFallbackGitChangeSetFromState(state: SwarmRunState | null): GitChangeSet {
   const workspace = state?.workspace || process.cwd();
   const changedFiles = Array.from(
@@ -90,8 +135,63 @@ export function useCockpitGitSurface(options: UseCockpitGitSurfaceOptions): Cock
   const [error, setError] = useState<string | null>(null);
   const [changeSet, setChangeSet] = useState<GitChangeSet>(fallbackChangeSet);
   const [commitDraft, setCommitDraft] = useState<CommitDraft>(fallbackCommitDraft);
+  const [selectedDiffPath, setSelectedDiffPath] = useState<string | null>(
+    fallbackCommitDraft.selectedFiles[0] || fallbackChangeSet.changedFiles[0]?.path || null,
+  );
+  const [diffStatus, setDiffStatus] = useState<CockpitGitSurfaceState["diffStatus"]>("idle");
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [diffPreview, setDiffPreview] = useState<GitDiffPreview | null>(null);
 
   const scopedWorkspace = workspace?.trim() || state?.workspace || fallbackChangeSet.workspace;
+
+  const refreshDiff = useCallback(async (filePath?: string | null) => {
+    const resolvedFilePath = filePath?.trim() || selectedDiffPath;
+    if (!resolvedFilePath) {
+      setDiffStatus("idle");
+      setDiffError(null);
+      setDiffPreview(null);
+      return;
+    }
+
+    setDiffStatus("loading");
+    setDiffError(null);
+
+    try {
+      const params = new URLSearchParams();
+      if (scopedWorkspace) {
+        params.set("workspace", scopedWorkspace);
+      }
+      params.set("file", resolvedFilePath);
+      const response = await fetch(`/api/swarm/git/diff?${params.toString()}`, {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      if (response.status === 404 || response.status === 501) {
+        setDiffStatus("unavailable");
+        setDiffPreview(null);
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(`Git diff request failed: ${response.status}`);
+      }
+
+      const payload = await response.json();
+      const normalized = normalizeGitDiffPayload(payload);
+      if (!normalized) {
+        setDiffStatus("unavailable");
+        setDiffPreview(null);
+        return;
+      }
+
+      setDiffPreview(normalized);
+      setDiffStatus("ready");
+    } catch (surfaceError) {
+      setDiffStatus("error");
+      setDiffError(surfaceError instanceof Error ? surfaceError.message : String(surfaceError));
+      setDiffPreview(null);
+    }
+  }, [scopedWorkspace, selectedDiffPath]);
 
   const refresh = useCallback(async () => {
     setStatus("loading");
@@ -125,10 +225,17 @@ export function useCockpitGitSurface(options: UseCockpitGitSurfaceOptions): Cock
         return;
       }
       setChangeSet(normalized);
+      const nextSelectedFiles = normalized.changedFiles.map((item) => item.path);
       setCommitDraft((currentDraft) => ({
         ...currentDraft,
-        selectedFiles: normalized.changedFiles.map((item) => item.path),
+        selectedFiles: nextSelectedFiles,
       }));
+      setSelectedDiffPath((currentPath) => {
+        if (currentPath && nextSelectedFiles.includes(currentPath)) {
+          return currentPath;
+        }
+        return nextSelectedFiles[0] || null;
+      });
       setStatus("ready");
     } catch (surfaceError) {
       setStatus("error");
@@ -139,6 +246,10 @@ export function useCockpitGitSurface(options: UseCockpitGitSurfaceOptions): Cock
 
   const updateDraft = useCallback((draft: CommitDraft) => {
     setCommitDraft(draft);
+  }, []);
+
+  const selectDiffPath = useCallback((filePath: string | null) => {
+    setSelectedDiffPath(filePath?.trim() || null);
   }, []);
 
   const commit = useCallback(async () => {
@@ -185,14 +296,30 @@ export function useCockpitGitSurface(options: UseCockpitGitSurfaceOptions): Cock
     return changeSet.changedFiles.length > 0 ? "ready" : "unavailable";
   }, [changeSet.changedFiles.length, status]);
 
+  useEffect(() => {
+    if (!selectedDiffPath) {
+      setDiffStatus("idle");
+      setDiffError(null);
+      setDiffPreview(null);
+      return;
+    }
+
+    void refreshDiff(selectedDiffPath);
+  }, [refreshDiff, selectedDiffPath]);
+
   return {
     status: resolvedStatus,
     error,
     changeSet,
     commitDraft,
+    selectedDiffPath,
+    diffStatus,
+    diffError,
+    diffPreview,
     refresh,
     updateDraft,
+    selectDiffPath,
+    refreshDiff,
     commit,
   };
 }
-

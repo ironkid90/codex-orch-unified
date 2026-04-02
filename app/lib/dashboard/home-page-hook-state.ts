@@ -15,6 +15,42 @@ export interface DerivedHomePageDashboardState {
   viewModel: ReturnType<typeof buildDashboardViewModel>;
 }
 
+function normalizeWorkspacePath(value?: string | null): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return process.platform === "win32" ? trimmed.toLowerCase() : trimmed;
+}
+
+function mergeDashboardStates(dataState: SwarmRunState | null, streamState: SwarmRunState | null): SwarmRunState | null {
+  if (!streamState) {
+    return dataState;
+  }
+  if (!dataState) {
+    return streamState;
+  }
+
+  const dataWorkspace = normalizeWorkspacePath(dataState.workspace);
+  const streamWorkspace = normalizeWorkspacePath(streamState.workspace);
+  if (dataWorkspace && streamWorkspace && dataWorkspace !== streamWorkspace) {
+    return dataState;
+  }
+
+  const dataRecord = dataState as SwarmRunState & { cockpit?: unknown };
+  const streamRecord = streamState as SwarmRunState & { cockpit?: unknown };
+
+  return {
+    ...dataState,
+    ...streamState,
+    ...(dataRecord.cockpit !== undefined
+      ? { cockpit: dataRecord.cockpit }
+      : streamRecord.cockpit !== undefined
+        ? { cockpit: streamRecord.cockpit }
+        : {}),
+  };
+}
+
 export function deriveHomePageDashboardState({
   data,
   stream,
@@ -27,7 +63,7 @@ export function deriveHomePageDashboardState({
   stream: Pick<SwarmDashboardStreamState, "state" | "graphState" | "tokenSnapshot">;
   selectedAgentId?: AgentId | null;
 }): DerivedHomePageDashboardState {
-  const mergedState = stream.state ?? data.state;
+  const mergedState = mergeDashboardStates(data.state, stream.state);
   const mergedGraphState = stream.graphState ?? data.graphState;
   const mergedTokenSnapshot = stream.tokenSnapshot ?? data.tokenSnapshot;
 

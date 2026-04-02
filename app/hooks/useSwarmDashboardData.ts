@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { buildWorkspaceScopedUrl } from "@/app/hooks/useWorkspaceSelection";
 import { buildDashboardViewModel, type DashboardTokenSnapshot } from "@/app/lib/dashboard/view-models";
 import type { GraphExecutionState, WorkflowGraph } from "@/lib/swarm/graph-types";
 import type { RunHistoryAnalytics } from "@/lib/swarm/run-history";
@@ -64,6 +65,7 @@ export interface SwarmDashboardCapabilities {
 export interface UseSwarmDashboardDataOptions {
   autoLoad?: boolean;
   selectedAgentId?: AgentId | null;
+  workspace?: string | null;
 }
 
 export interface UseSwarmDashboardDataResult {
@@ -96,6 +98,25 @@ async function fetchOptionalJson<T>(response: Response): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+export interface DashboardDataRequestUrls {
+  state: string;
+  tokens: string;
+  history: string;
+  graph: string;
+  graphState: (runId: string) => string;
+}
+
+export function buildDashboardDataRequestUrls(workspace?: string | null): DashboardDataRequestUrls {
+  return {
+    state: buildWorkspaceScopedUrl("/api/swarm/state", workspace),
+    tokens: buildWorkspaceScopedUrl("/api/swarm/tokens", workspace),
+    history: buildWorkspaceScopedUrl("/api/swarm/history?analytics=true", workspace),
+    graph: buildWorkspaceScopedUrl("/api/swarm/graph?id=default", workspace),
+    graphState: (runId: string) =>
+      buildWorkspaceScopedUrl(`/api/swarm/graph/state?runId=${encodeURIComponent(runId)}`, workspace),
+  };
 }
 
 export function resolveGraphStateLoadResult({
@@ -156,7 +177,7 @@ export function resolveGraphStateLoadResult({
 }
 
 export function useSwarmDashboardData(options: UseSwarmDashboardDataOptions = {}): UseSwarmDashboardDataResult {
-  const { autoLoad = true, selectedAgentId = null } = options;
+  const { autoLoad = true, selectedAgentId = null, workspace = null } = options;
   const [status, setStatus] = useState<UseSwarmDashboardDataResult["status"]>("idle");
   const [error, setError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<SwarmDashboardCapabilities | null>(null);
@@ -169,20 +190,21 @@ export function useSwarmDashboardData(options: UseSwarmDashboardDataOptions = {}
   const [historyAnalytics, setHistoryAnalytics] = useState<RunHistoryAnalytics | null>(null);
 
   const refresh = useCallback(async () => {
+    const urls = buildDashboardDataRequestUrls(workspace);
     setStatus("loading");
     setError(null);
     setGraphStateStatus("loading");
     setGraphStateError(null);
 
     try {
-      const stateData = await fetchJson<StateResponse>("/api/swarm/state");
+      const stateData = await fetchJson<StateResponse>(urls.state);
       setState(stateData.state);
       setCapabilities(stateData.capabilities);
 
       const [tokenData, historyData, graphData] = await Promise.all([
-        fetchJson<TokensResponse>("/api/swarm/tokens"),
-        fetchJson<HistoryAnalyticsResponse>("/api/swarm/history?analytics=true"),
-        fetchJson<GraphResponse>("/api/swarm/graph?id=default"),
+        fetchJson<TokensResponse>(urls.tokens),
+        fetchJson<HistoryAnalyticsResponse>(urls.history),
+        fetchJson<GraphResponse>(urls.graph),
       ]);
 
       setTokenSnapshot({
@@ -193,7 +215,7 @@ export function useSwarmDashboardData(options: UseSwarmDashboardDataOptions = {}
       setGraph(graphData.graph?.graph ?? null);
 
       if (stateData.state.runId) {
-        const graphStateResponse = await fetch(`/api/swarm/graph/state?runId=${encodeURIComponent(stateData.state.runId)}`, {
+        const graphStateResponse = await fetch(urls.graphState(stateData.state.runId), {
           cache: "no-store",
         });
 
@@ -221,7 +243,7 @@ export function useSwarmDashboardData(options: UseSwarmDashboardDataOptions = {}
       setGraphStateStatus("error");
       setGraphStateError(loadError instanceof Error ? loadError.message : String(loadError));
     }
-  }, []);
+  }, [workspace]);
 
   useEffect(() => {
     if (!autoLoad) {

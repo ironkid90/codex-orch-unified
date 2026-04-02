@@ -1,4 +1,4 @@
-import type { SwarmRunState } from "@/lib/swarm/types";
+import type { AgentId, SwarmRunState } from "@/lib/swarm/types";
 
 export interface Project {
   id: string;
@@ -222,7 +222,8 @@ function deriveThreadSummaries(state: SwarmRunState, workstreams: Workstream[]):
   const agentMap = new Map(Object.values(state.agents).map((agent) => [agent.id, agent]));
 
   return workstreams.map((stream) => {
-    const agent = stream.agentIds.length ? agentMap.get(stream.agentIds[0]) : undefined;
+    const agentId = stream.agentIds[0] as AgentId | undefined;
+    const agent = agentId ? agentMap.get(agentId) : undefined;
     const threadId = stream.threadIds[0] || `thread-${stream.id}`;
     const relatedMessages = state.messages.filter((message) => {
       return message.from === agent?.id || message.to === agent?.id;
@@ -251,7 +252,7 @@ function deriveThreadSummaries(state: SwarmRunState, workstreams: Workstream[]):
 
 function deriveThreadDetails(state: SwarmRunState, summaries: ThreadSummary[]): ThreadDetail[] {
   return summaries.map((summary) => {
-    const agentId = summary.workstreamId.replace(/^workstream-/, "");
+    const agentId = summary.workstreamId.replace(/^workstream-/, "") as AgentId;
     const transcriptPreview = state.messages
       .filter((message) => message.from === agentId || message.to === agentId)
       .slice(-8)
@@ -275,7 +276,8 @@ function deriveAgentAssignments(state: SwarmRunState, workstreams: Workstream[])
   const agentById = new Map(Object.values(state.agents).map((agent) => [agent.id, agent]));
   return workstreams.flatMap((stream) =>
     stream.agentIds.map((agentId) => {
-      const agent = agentById.get(agentId);
+      const normalizedAgentId = agentId as AgentId;
+      const agent = agentById.get(normalizedAgentId);
       const health: AgentAssignment["health"] =
         agent?.phase === "failed"
           ? "degraded"
@@ -285,7 +287,7 @@ function deriveAgentAssignments(state: SwarmRunState, workstreams: Workstream[])
               ? "degraded"
               : "warning";
       return {
-        agentId,
+        agentId: normalizedAgentId,
         workstreamId: stream.id,
         role: agent?.label || agentId,
         phase: agent?.phase || "idle",
@@ -434,4 +436,3 @@ export function buildCodingCockpitViewModel(state: SwarmRunState | null): Coding
     commitDraft,
   };
 }
-

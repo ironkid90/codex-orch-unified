@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { resolveGraphStateLoadResult } from "../../../app/hooks/useSwarmDashboardData";
+import { buildDashboardDataRequestUrls, resolveGraphStateLoadResult } from "../../../app/hooks/useSwarmDashboardData";
+import { buildWorkspaceScopedUrl } from "../../../app/hooks/useWorkspaceSelection";
 import type { GraphExecutionState } from "../../../lib/swarm/graph-types";
 
 const sampleGraphState: GraphExecutionState = {
@@ -96,4 +97,18 @@ test("resolveGraphStateLoadResult returns ready graph-state payloads intact", ()
   assert.equal(result.graphStateStatus, "ready");
   assert.equal(result.graphStateError, null);
   assert.deepEqual(result.graphState, sampleGraphState);
+});
+
+test("buildDashboardDataRequestUrls scopes dashboard requests to the selected workspace", () => {
+  const workspace = "C:/repo/codex-orch-unified/.swarm-workspaces/issue-123";
+  const urls = buildDashboardDataRequestUrls(workspace);
+
+  assert.equal(urls.state, buildWorkspaceScopedUrl("/api/swarm/state", workspace));
+  assert.equal(urls.tokens, buildWorkspaceScopedUrl("/api/swarm/tokens", workspace));
+  assert.equal(urls.history, buildWorkspaceScopedUrl("/api/swarm/history?analytics=true", workspace));
+  assert.equal(urls.graph, buildWorkspaceScopedUrl("/api/swarm/graph?id=default", workspace));
+
+  const graphStateUrl = urls.graphState("run-123");
+  assert.match(graphStateUrl, /runId=run-123/);
+  assert.match(graphStateUrl, /workspace=/);
 });

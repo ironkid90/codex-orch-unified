@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { CockpitGitSurfaceState } from "@/app/hooks/useCockpitGitSurface";
 
@@ -26,6 +26,14 @@ export function GitCockpitPanel({ gitSurface, busy = false }: GitCockpitPanelPro
     () => gitSurface.changeSet.changedFiles.map((item) => item.path),
     [gitSurface.changeSet.changedFiles],
   );
+
+  useEffect(() => {
+    setCommitMessage(gitSurface.commitDraft.message);
+  }, [gitSurface.commitDraft.message]);
+
+  useEffect(() => {
+    setSelectedFiles(gitSurface.commitDraft.selectedFiles);
+  }, [gitSurface.commitDraft.selectedFiles]);
 
   const toggleFile = (path: string) => {
     setSelectedFiles((current) => (current.includes(path) ? current.filter((item) => item !== path) : [...current, path]));
@@ -81,16 +89,26 @@ export function GitCockpitPanel({ gitSurface, busy = false }: GitCockpitPanelPro
             <ul className="round-notes">
               {gitSurface.changeSet.changedFiles.map((file) => (
                 <li key={file.path}>
-                  <label style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={selectedFiles.includes(file.path)}
-                      onChange={() => toggleFile(file.path)}
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <label style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer", flex: 1 }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedFiles.includes(file.path)}
+                        onChange={() => toggleFile(file.path)}
+                        disabled={busy || commitBusy}
+                      />
+                      <span className={`badge ${statusClass(file.status)}`}>{file.status}</span>
+                      <code>{file.path}</code>
+                    </label>
+                    <button
+                      className="btn btn-secondary"
+                      type="button"
+                      onClick={() => gitSurface.selectDiffPath(file.path)}
                       disabled={busy || commitBusy}
-                    />
-                    <span className={`badge ${statusClass(file.status)}`}>{file.status}</span>
-                    <code>{file.path}</code>
-                  </label>
+                    >
+                      {gitSurface.selectedDiffPath === file.path ? "Previewing" : "Preview"}
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -101,6 +119,50 @@ export function GitCockpitPanel({ gitSurface, busy = false }: GitCockpitPanelPro
             ) : null}
           </div>
         )}
+
+        <div className="round-row">
+          <div className="round-head">
+            <strong>Patch Preview</strong>
+            <span className={`badge ${statusClass(gitSurface.diffStatus)}`}>{gitSurface.diffStatus}</span>
+          </div>
+          <div className="round-detail">
+            File: {gitSurface.selectedDiffPath || "No file selected"}
+            {gitSurface.diffPreview?.mode ? (
+              <>
+                <br />
+                Mode: {gitSurface.diffPreview.mode}
+              </>
+            ) : null}
+            {gitSurface.diffPreview?.truncated ? (
+              <>
+                <br />
+                Preview truncated for readability.
+              </>
+            ) : null}
+          </div>
+          {gitSurface.diffError ? (
+            <div className="error-banner">
+              <strong>Diff preview error</strong>
+              <p>{gitSurface.diffError}</p>
+            </div>
+          ) : gitSurface.diffPreview ? (
+            <pre
+              style={{
+                marginTop: 12,
+                maxHeight: 280,
+                overflow: "auto",
+                whiteSpace: "pre-wrap",
+                borderRadius: 12,
+                padding: 12,
+                background: "rgba(5, 8, 20, 0.55)",
+              }}
+            >
+              {gitSurface.diffPreview.patch}
+            </pre>
+          ) : (
+            <p className="empty-text">Choose a changed file to inspect the patch before committing.</p>
+          )}
+        </div>
 
         <div className="round-row">
           <label className="control-label" style={{ width: "100%" }}>
@@ -131,4 +193,3 @@ export function GitCockpitPanel({ gitSurface, busy = false }: GitCockpitPanelPro
     </section>
   );
 }
-
