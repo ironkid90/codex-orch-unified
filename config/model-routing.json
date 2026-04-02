@@ -11,6 +11,13 @@
       "detail": "Codex CLI detected (OAuth login handled by codex CLI session)."
     },
     {
+      "candidateId": "openai-mini",
+      "provider": "openai",
+      "model": "gpt-5.4-mini",
+      "available": false,
+      "detail": "Preferred bulk worker model for custom-agent fleets once API or Azure deployment is configured."
+    },
+    {
       "candidateId": "openai-primary",
       "provider": "openai",
       "model": "gpt-5.4",
@@ -71,15 +78,15 @@
     },
     "worker1": {
       "provider": "openai",
-      "model": "gpt-5.4",
-      "score": 98,
-      "rationale": "Strong coding capabilities."
+      "model": "gpt-5.4-mini",
+      "score": 96,
+      "rationale": "Default high-throughput coding worker. Prioritizes cheap parallel execution with strong enough completion quality."
     },
     "worker2": {
-      "provider": "anthropic",
-      "model": "claude-sonnet-4-5",
-      "score": 94,
-      "rationale": "Excellent for code auditing and review."
+      "provider": "openai",
+      "model": "gpt-5.4-mini",
+      "score": 95,
+      "rationale": "Second default worker also runs mini-first so the swarm can scale coding throughput without frontier-only cost."
     },
     "evaluator": {
       "provider": "anthropic",
@@ -125,16 +132,22 @@
     ],
     "worker1": [
       {
-        "provider": "anthropic",
-        "model": "claude-sonnet-4-5",
+        "provider": "openai",
+        "model": "gpt-5.4",
         "score": 90,
-        "rationale": "Anthropic fallback for coding."
+        "rationale": "Frontier OpenAI fallback when the mini worker needs more depth."
       },
       {
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
         "score": 85,
         "rationale": "Gemini fallback for coding."
+      },
+      {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "score": 83,
+        "rationale": "Anthropic fallback for coding experiments."
       }
     ],
     "worker2": [
@@ -142,12 +155,18 @@
         "provider": "openai",
         "model": "gpt-5.4",
         "score": 88,
-        "rationale": "OpenAI fallback for auditing."
+        "rationale": "Frontier OpenAI fallback when the second worker needs deeper analysis."
+      },
+      {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "score": 86,
+        "rationale": "Anthropic fallback for review-heavy second-worker tasks."
       },
       {
         "provider": "gemini",
         "model": "gemini-3.1-pro-preview",
-        "score": 82,
+        "score": 81,
         "rationale": "Gemini fallback for auditing."
       }
     ],

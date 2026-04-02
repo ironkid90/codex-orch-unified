@@ -21,6 +21,7 @@
   ],
   "tiers": {
     "nano":      { "maxCostInputPerMToken": 0.50,  "description": "Ultra-fast, ultra-cheap. Route trivial tasks here." },
+    "mini":      { "maxCostInputPerMToken": 1.50,  "description": "High-throughput small frontier-class workers for parallel coding tasks." },
     "mid":       { "maxCostInputPerMToken": 3.00,  "description": "Balanced cost/quality for standard coding tasks." },
     "frontier":  { "maxCostInputPerMToken": 15.00, "description": "Best general capability. Default for complex tasks." },
     "reasoning": { "maxCostInputPerMToken": 999.00, "description": "Extended thinking, deep analysis. Use for architecture and debugging." }
@@ -123,6 +124,55 @@
       "weaknesses": ["newer model — less battle-tested", "moderate cost"],
       "slo": { "p50LatencyMs": 1200, "p95LatencyMs": 5000, "tokensPerSecond": 180 },
       "notes": "First general-purpose OpenAI model with native computer use. Combines Codex coding strengths + reasoning."
+    },
+    {
+      "candidateId": "gpt-5.4-mini",
+      "provider": "openai",
+      "model": "gpt-5.4-mini",
+      "displayName": "GPT-5.4 Mini",
+      "family": "openai",
+      "tier": "mini",
+      "releasedAt": "2026-03",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 32000,
+      "supportsTools": true,
+      "supportsVision": true,
+      "supportsAudio": true,
+      "supportsStreaming": true,
+      "supportsExtendedThinking": true,
+      "pricing": { "inputPerMTokens": 0.45, "outputPerMTokens": 1.80 },
+      "benchmarks": {
+        "swebench_verified": 74,
+        "swebench_pro": null,
+        "terminal_bench_2": 64,
+        "livecodebench_elo": null,
+        "humaneval": 94,
+        "arc_agi_2": null,
+        "osworld_verified": null,
+        "aime": null,
+        "gpqa_diamond": null,
+        "webdev_arena_elo": null
+      },
+      "taskScores": {
+        "code_generation": 8.2,
+        "bug_fixing": 7.8,
+        "agentic_execution": 8.0,
+        "architecture_reasoning": 7.4,
+        "algorithmic_math": 7.2,
+        "large_codebase_nav": 7.8,
+        "code_review": 7.6,
+        "test_generation": 7.8,
+        "documentation": 7.5,
+        "frontend_ui": 7.5,
+        "computer_use": 7.8,
+        "multilingual_code": 7.8,
+        "security_analysis": 7.1,
+        "fast_simple_tasks": 9.3
+      },
+      "strengths": ["high-throughput coding", "cheap parallel workers", "strong enough for completion-driven execution", "1M context"],
+      "weaknesses": ["weaker deep review than frontier models", "less margin for ambiguous planning tasks"],
+      "slo": { "p50LatencyMs": 700, "p95LatencyMs": 2800, "tokensPerSecond": 320 },
+      "notes": "Preferred default for high-volume coding workers and custom-agent fleets where orchestration quality matters more than single-call frontier strength."
     },
     {
       "candidateId": "gpt-5.2",

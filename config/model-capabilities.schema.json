@@ -41,7 +41,7 @@
           "model": { "type": "string", "description": "The model string passed to the API." },
           "displayName": { "type": "string" },
           "family": { "type": "string", "description": "Model family for grouping (openai, anthropic, google, meta, alibaba, etc.)" },
-          "tier": { "type": "string", "enum": ["nano", "mid", "frontier", "reasoning"] },
+          "tier": { "type": "string", "enum": ["nano", "mini", "mid", "frontier", "reasoning"] },
           "releasedAt": { "type": "string" },
           "contextWindow": { "type": "integer", "minimum": 1 },
           "maxOutputTokens": { "type": "integer", "minimum": 1 },

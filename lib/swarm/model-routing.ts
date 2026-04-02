@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -85,7 +86,21 @@ function getForcedResearchExecution(): RoleExecutionPreference | null {
 
 export function resolveRoutingConfigPath(workspace: string): string {
   const configured = process.env.SWARM_MODEL_ROUTING_FILE || DEFAULT_ROUTING_FILE;
-  return path.isAbsolute(configured) ? configured : path.join(workspace, configured);
+  if (path.isAbsolute(configured)) {
+    return configured;
+  }
+
+  const workspaceCandidate = path.join(workspace, configured);
+  if (existsSync(workspaceCandidate)) {
+    return workspaceCandidate;
+  }
+
+  const repoCandidate = path.join(process.cwd(), configured);
+  if (existsSync(repoCandidate)) {
+    return repoCandidate;
+  }
+
+  return workspaceCandidate;
 }
 
 export function defaultRoleExecution(agentId: AgentId): RoleExecutionPreference {

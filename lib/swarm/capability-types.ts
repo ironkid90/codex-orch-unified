@@ -77,10 +77,11 @@ export const TASK_DIMENSION_MAP: Record<CodingTaskType, { primary: TaskDimension
 
 // ─── Model Tiers ────────────────────────────────────────────────────────────
 
-export type ModelTier = 'nano' | 'mid' | 'frontier' | 'reasoning';
+export type ModelTier = 'nano' | 'mini' | 'mid' | 'frontier' | 'reasoning';
 
 export const TIER_COST_CEILINGS: Record<ModelTier, number> = {
   nano: 0.50,
+  mini: 1.50,
   mid: 3.00,
   frontier: 15.00,
   reasoning: 999.00,
@@ -89,7 +90,7 @@ export const TIER_COST_CEILINGS: Record<ModelTier, number> = {
 /** Maps task complexity to minimum required tier */
 export const COMPLEXITY_TIER_MAP: Record<number, ModelTier> = {
   0: 'nano',      // trivial tasks — use cheapest
-  1: 'mid',       // standard tasks — balanced models
+  1: 'mini',      // standard parallel coding tasks — prefer high-throughput worker models
   2: 'frontier',  // complex tasks — best available
 };
 
