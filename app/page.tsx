@@ -6,10 +6,15 @@ import { AntigravityPanel } from "@/app/components/AntigravityPanel";
 import { ProviderStatusInventory } from "@/app/components/dashboard/settings/ProviderStatusInventory";
 import { useProviderAuthInventory } from "@/app/hooks/useProviderAuthInventory";
 import { WorkspaceSelector } from "@/app/components/dashboard/settings/WorkspaceSelector";
+import { MilestoneBoard } from "@/app/components/dashboard/cockpit/MilestoneBoard";
+import { HybridThreadsPanel } from "@/app/components/dashboard/cockpit/HybridThreadsPanel";
+import { GitCockpitPanel } from "@/app/components/dashboard/cockpit/GitCockpitPanel";
 import { useSwarmDashboardData } from "@/app/hooks/useSwarmDashboardData";
 import { useSwarmDashboardStream } from "@/app/hooks/useSwarmDashboardStream";
 import { useDashboardLayoutState } from "@/app/hooks/useDashboardLayoutState";
+import { useCockpitGitSurface } from "@/app/hooks/useCockpitGitSurface";
 import { deriveHomePageDashboardState, resolveHomePageError } from "@/app/lib/dashboard/home-page-hook-state";
+import { buildCodingCockpitViewModel } from "@/app/lib/dashboard/cockpit-view-model";
 import {
   buildWorkspaceAwareStartPayload,
   buildWorkspaceScopedUrl,
@@ -129,6 +134,7 @@ export default function HomePage() {
     [dashboardData, dashboardStream, layout.selectedAgentId],
   );
   const state = dashboard.state;
+  const cockpit = useMemo(() => buildCodingCockpitViewModel(state), [state]);
   const error = resolveHomePageError({
     actionError,
     dataError: dashboardData.error,
@@ -137,6 +143,12 @@ export default function HomePage() {
   const supportsLocal = dashboard.capabilities?.supportsLocalExecution ?? true;
   const supportsPauseResume = dashboard.capabilities?.supportsPauseResume ?? true;
   const supportsRewind = dashboard.capabilities?.supportsRewind ?? true;
+  const gitSurface = useCockpitGitSurface({
+    workspace: workspaceSelection.selectedWorkspace,
+    state,
+    fallbackChangeSet: cockpit.gitChangeSet,
+    fallbackCommitDraft: cockpit.commitDraft,
+  });
 
   const loadControlCenter = useCallback(async () => {
     try {
@@ -175,6 +187,10 @@ export default function HomePage() {
     setSecretInputs({});
     setSettingsMessage(null);
   }, [workspaceSelection.selectedWorkspace]);
+
+  useEffect(() => {
+    void gitSurface.refresh();
+  }, [gitSurface.refresh, state?.runId, workspaceSelection.selectedWorkspace]);
 
   const startRun = useCallback(async () => {
     setBusy(true);
@@ -656,6 +672,13 @@ export default function HomePage() {
             {settingsMessage && <span className="control-center-message">{settingsMessage}</span>}
           </div>
         </section>
+
+        <div className="content-grid equal">
+          <MilestoneBoard cockpit={cockpit} />
+          <HybridThreadsPanel cockpit={cockpit} />
+        </div>
+
+        <GitCockpitPanel gitSurface={gitSurface} busy={busy || settingsBusy || isRunning} />
 
         <ProviderStatusInventory
           inventory={providerInventory.inventory}
