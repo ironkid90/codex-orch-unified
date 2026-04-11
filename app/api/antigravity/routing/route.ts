@@ -3,20 +3,59 @@ import path from "node:path";
 
 import { NextResponse } from "next/server";
 
+import {
+  buildRoutingAssignmentDiff,
+  buildRoutingProviderCatalog,
+  normalizeRoutingConfig,
+  normalizeRoutingPreference,
+  validateRoutingDraft,
+  type RoutingPreference,
+} from "@/app/lib/antigravity/routing-console";
+import { AGENT_IDS, type AgentId } from "@/lib/swarm/types";
+
 export const dynamic = "force-dynamic";
 
 const ROUTING_FILE =
   process.env.SWARM_MODEL_ROUTING_FILE ||
   path.join(process.cwd(), "config", "model-routing.json");
 
+async function readRoutingConfig() {
+  const raw = await readFile(ROUTING_FILE, "utf8");
+  return normalizeRoutingConfig(JSON.parse(raw));
+}
+
+function normalizeAssignments(value: unknown): Partial<Record<AgentId, RoutingPreference>> {
+  const assignments: Partial<Record<AgentId, RoutingPreference>> = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return assignments;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  for (const agentId of AGENT_IDS) {
+    const preference = normalizeRoutingPreference(candidate[agentId]);
+    if (preference) {
+      assignments[agentId] = preference;
+    }
+  }
+
+  return assignments;
+}
+
 /**
- * GET  /api/antigravity/routing — Read the current model-routing.json
- * POST /api/antigravity/routing — Patch agent assignments
+ * GET  /api/antigravity/routing — Read the current model-routing.json with a normalized catalog.
+ * POST /api/antigravity/routing — Patch agent assignments after validating the requested draft.
  */
 export async function GET() {
   try {
-    const raw = await readFile(ROUTING_FILE, "utf8");
-    return NextResponse.json(JSON.parse(raw));
+    const config = await readRoutingConfig();
+    const catalog = buildRoutingProviderCatalog({ routing: config });
+    const validation = validateRoutingDraft({ assignments: config.assignments, catalog });
+
+    return NextResponse.json({
+      ...config,
+      catalog,
+      validation,
+    });
   } catch {
     return NextResponse.json(
       { error: "Could not read model-routing.json" },
@@ -28,7 +67,9 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
-      assignments?: Record<string, { provider: string; model: string; score?: number; rationale?: string }>;
+      assignments?: Record<string, RoutingPreference>;
+      statusModels?: string[];
+      validateOnly?: boolean;
     };
 
     if (!body.assignments) {
@@ -38,19 +79,45 @@ export async function POST(request: Request) {
       );
     }
 
-    // Read current config
-    const raw = await readFile(ROUTING_FILE, "utf8");
-    const config = JSON.parse(raw) as Record<string, unknown>;
-
-    // Merge new assignments
-    config.assignments = {
-      ...(config.assignments as Record<string, unknown>),
-      ...body.assignments,
+    const currentConfig = await readRoutingConfig();
+    const nextAssignments = {
+      ...(currentConfig.assignments ?? {}),
+      ...normalizeAssignments(body.assignments),
     };
-    config.updatedAt = new Date().toISOString();
+    const catalog = buildRoutingProviderCatalog({
+      routing: currentConfig,
+      statusModels: Array.isArray(body.statusModels) ? body.statusModels : undefined,
+    });
+    const validation = validateRoutingDraft({ assignments: nextAssignments, catalog });
+    const diff = buildRoutingAssignmentDiff(currentConfig.assignments, nextAssignments);
 
-    await writeFile(ROUTING_FILE, JSON.stringify(config, null, 2) + "\n", "utf8");
-    return NextResponse.json({ ok: true, config });
+    if (!validation.valid) {
+      return NextResponse.json(
+        {
+          error: "Routing validation failed.",
+          validation,
+          diff,
+        },
+        { status: 400 },
+      );
+    }
+
+    if (body.validateOnly) {
+      return NextResponse.json({
+        ok: true,
+        validation,
+        diff,
+      });
+    }
+
+    const nextConfig = {
+      ...currentConfig,
+      assignments: nextAssignments,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await writeFile(ROUTING_FILE, JSON.stringify(nextConfig, null, 2) + "\n", "utf8");
+    return NextResponse.json({ ok: true, config: nextConfig, validation, diff });
   } catch (err) {
     return NextResponse.json(
       { error: `Failed to update routing: ${String(err)}` },

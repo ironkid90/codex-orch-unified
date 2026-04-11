@@ -79,3 +79,4 @@ compile_errors.txt
 ${SQLITE_DB_PATH}
 *.exe
 .azure
+/.github
