@@ -1,0 +1,20 @@
+{
+	"PreToolUse": [
+		{
+			"command": "./C:\\Users\\Gabi\\.agent-runtime\\scripts\\tocodex-hooks\\pre-tool-use-orchestrator.ps1",
+			"timeout": 30000
+		}
+	],
+	"PostToolUse": [
+		{
+			"command": "./C:\\Users\\Gabi\\.agent-runtime\\scripts\\tocodex-hooks\\post-tool-use-log.ps1",
+			"timeout": 30000
+		}
+	],
+	"Stop": [
+		{
+			"command": "./C:\\Users\\Gabi\\.agent-runtime\\scripts\\tocodex-hooks\\task-stop-log.ps1",
+			"timeout": 30000
+		}
+	]
+}

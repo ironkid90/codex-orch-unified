@@ -1,0 +1,22 @@
+{
+  "taskId": "019d7fd9-ae83-713f-aa31-f4bd6c09d4e1",
+  "todos": [
+    {
+      "id": "641cf0c663010c93509bb51fde553d60",
+      "content": "Inspect current hook configuration and identify why Windows cannot launch the scripts",
+      "status": "completed"
+    },
+    {
+      "id": "6c7330c16d086355dec34816bd879862",
+      "content": "Correct the hook command paths/configuration for Windows",
+      "status": "completed"
+    },
+    {
+      "id": "1572b8682a3b647c177b668252359143",
+      "content": "Verify the fixed hook setup and summarize the working configuration",
+      "status": "completed"
+    }
+  ],
+  "lastUpdated": 1775967187784,
+  "status": "active"
+}
