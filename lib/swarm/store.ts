@@ -33,7 +33,7 @@ import { isAzurePersistenceEnabled } from "./azure-contract";
 
 const MAX_EVENTS = 500;
 
-/** Duration (ms) after which a persisted "running" state is considered stale and auto-recovered. Default: 1 hour. */
+/** Duration (ms) after which a persisted "running" state with no heartbeat is considered stale. Default: 1 hour. */
 const STALE_THRESHOLD_MS = Number(process.env.SWARM_STALE_THRESHOLD_MS) || 3_600_000;
 
 type EventInput = Omit<SwarmEvent, "id" | "runId" | "ts">;
@@ -104,6 +104,14 @@ function normalizeState(state?: Partial<SwarmRunState>): SwarmRunState {
   };
 }
 
+function parseTimestampMs(value?: string): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 class SwarmStore {
   private readonly emitter = new EventEmitter();
   private state = createInitialState();
@@ -116,6 +124,7 @@ class SwarmStore {
 
   getState(): SwarmRunState {
     this.hydrateFromDisk();
+    this.recoverStaleRunIfNeeded();
     this.refreshPendingControls(false);
     return cloneState(this.state);
   }
@@ -176,6 +185,7 @@ class SwarmStore {
     features?: Partial<SwarmFeatures>;
   }): string {
     this.hydrateFromDisk();
+    this.recoverStaleRunIfNeeded();
 
     if (this.state.running) {
       // Edge case: running flag set but no runId — corrupt state, force-reset.
@@ -183,16 +193,7 @@ class SwarmStore {
         console.warn("[SwarmStore] Detected running=true with null runId. Force-resetting corrupt state.");
         this.forceReset("Corrupt state: running=true with null runId");
       } else if (this.state.startedAt) {
-        const elapsed = Date.now() - new Date(this.state.startedAt).getTime();
-        if (elapsed > STALE_THRESHOLD_MS) {
-          console.warn(
-            `[SwarmStore] Detected stale run ${this.state.runId?.slice(0, 8)} ` +
-            `(started ${Math.round(elapsed / 60_000)}m ago, threshold=${STALE_THRESHOLD_MS}ms). Auto-recovering.`
-          );
-          this.forceReset(`Stale run auto-recovered after ${Math.round(elapsed / 60_000)}m`);
-        } else {
-          throw new Error("A swarm run is already in progress.");
-        }
+        throw new Error("A swarm run is already in progress.");
       } else {
         // running=true, runId set, but no startedAt — treat as corrupt
         console.warn("[SwarmStore] Detected running=true with no startedAt timestamp. Force-resetting.");
@@ -465,6 +466,39 @@ class SwarmStore {
     this.state = normalizeState(persisted.state);
     const maxEventId = this.state.events.reduce((highest, event) => Math.max(highest, event.id), 0);
     this.eventCounter = Math.max(this.eventCounter, maxEventId);
+  }
+
+  private recoverStaleRunIfNeeded(): void {
+    if (!this.state.running || this.state.paused) {
+      return;
+    }
+
+    if (!this.state.runId) {
+      console.warn("[SwarmStore] Detected running=true with null runId. Force-resetting corrupt state.");
+      this.forceReset("Corrupt state: running=true with null runId");
+      return;
+    }
+
+    const heartbeatMs = parseTimestampMs(this.state.activity.lastHeartbeatAt);
+    const startedMs = parseTimestampMs(this.state.startedAt);
+    const freshnessMs = heartbeatMs ?? startedMs;
+    if (!freshnessMs) {
+      console.warn("[SwarmStore] Detected running=true with no heartbeat or startedAt timestamp. Force-resetting.");
+      this.forceReset("Corrupt state: running=true with no heartbeat or startedAt");
+      return;
+    }
+
+    const elapsed = Date.now() - freshnessMs;
+    if (elapsed <= STALE_THRESHOLD_MS) {
+      return;
+    }
+
+    const staleSource = heartbeatMs ? "heartbeat" : "start timestamp";
+    console.warn(
+      `[SwarmStore] Detected stale run ${this.state.runId.slice(0, 8)} ` +
+      `(${staleSource} ${Math.round(elapsed / 60_000)}m old, threshold=${STALE_THRESHOLD_MS}ms). Auto-recovering.`,
+    );
+    this.forceReset(`Stale run auto-recovered after ${Math.round(elapsed / 60_000)}m without runtime heartbeat`);
   }
 
   private persistSnapshot(): void {

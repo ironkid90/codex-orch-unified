@@ -28,7 +28,16 @@ export async function POST(request: Request) {
   const currentState = isAzurePersistenceEnabled()
     ? await swarmStore.syncFromRemote()
     : swarmStore.getState();
-  if (currentState.running || runtime.getActiveRunPromise()) {
+  if (runtime.getActiveRunPromise()) {
+    return NextResponse.json(
+      {
+        error: "A swarm run is already active.",
+        state: currentState,
+      },
+      { status: 409 },
+    );
+  }
+  if (currentState.running) {
     return NextResponse.json(
       {
         error: "A swarm run is already active.",

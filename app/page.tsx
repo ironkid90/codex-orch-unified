@@ -312,6 +312,7 @@ export default function HomePage() {
   const pendingControls = state?.pendingControls ?? [];
   const latestPendingControl = pendingControls.at(-1);
   const pendingPause = pendingControls.find((control) => control.action === "pause");
+  const pendingResume = pendingControls.find((control) => control.action === "resume");
   const activeStep = dashboard.viewModel.topSummary.activeStep;
   const activeGate = dashboard.viewModel.topSummary.activeGate;
   const heartbeatAt = dashboard.viewModel.topSummary.heartbeatAt;
@@ -326,7 +327,7 @@ export default function HomePage() {
         : "○ Idle";
 
   const canPause = supportsPauseResume && isRunning && !state?.paused && !pendingPause;
-  const canResume = supportsPauseResume && isRunning && Boolean(state?.paused) && Boolean(activeGate);
+  const canResume = supportsPauseResume && isRunning && Boolean(state?.paused) && !pendingResume;
   const canRewind = supportsRewind && Boolean(state?.paused) && Boolean(latestCheckpointRound) && pendingControls.length === 0;
   const heartbeatState = heartbeatAt ? formatAgeFromNow(heartbeatAt) : "no heartbeat yet";
   const contextHealth = resolveContextHealthLabel(controlCenter);
@@ -515,9 +516,14 @@ export default function HomePage() {
           <Play size={14} fill="currentColor" /> Resume {activeGate ? `(${activeGate})` : ""}
         </button>
       ) : null}
-      {supportsPauseResume && isRunning && Boolean(state?.paused) && !activeGate ? (
+      {!canResume && supportsPauseResume && isRunning && Boolean(state?.paused) && pendingResume ? (
         <button className="btn btn-secondary" disabled style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <Pause size={14} /> Waiting…
+          <Play size={14} /> Resume Pending
+        </button>
+      ) : null}
+      {!canResume && supportsPauseResume && isRunning && Boolean(state?.paused) && !pendingResume ? (
+        <button className="btn btn-secondary" disabled style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Pause size={14} /> Paused
         </button>
       ) : null}
       {canRewind ? (

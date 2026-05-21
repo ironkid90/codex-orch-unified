@@ -3309,10 +3309,7 @@ export function startSwarmRun(options: StartOptions = {}): StartResult {
   try {
     const persisted = swarmStore.getState();
     if (persisted.running && !activeRunPromise) {
-      // Use forceReset instead of failRun — failRun throws when runId is null.
-      swarmStore.forceReset(
-        "Recovered stale persisted run state before starting a new run (no active local runner).",
-      );
+      throw new Error("A swarm run is already in progress.");
     }
 
     const maxRounds = clampRounds(options.maxRounds);

@@ -24,7 +24,7 @@ export async function GET(request: Request) {
       state,
       capabilities: {
         supportsLocalExecution: !process.env.VERCEL && contract.executionRole !== "web",
-        supportsPauseResume: state.features.humanInLoop,
+        supportsPauseResume: state.running,
         supportsRewind: state.features.checkpointing,
       },
       execution: {

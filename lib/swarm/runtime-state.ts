@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
+  closeSync,
   existsSync,
+  openSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -69,6 +71,14 @@ function controlFileName(request: ControlRequestBase): string {
   return `${request.requestedAt.replace(/[:.]/g, "-")}__${request.action}__${request.id}.json`;
 }
 
+function atomicWriteJson(filePath: string, value: unknown): void {
+  const dir = path.dirname(filePath);
+  mkdirSync(dir, { recursive: true });
+  const tempFile = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  writeFileSync(tempFile, JSON.stringify(value, null, 2), "utf8");
+  renameSync(tempFile, filePath);
+}
+
 export function getRuntimeStateFilePath(): string {
   ensureRuntimeDirs();
   return STATE_FILE;
@@ -80,12 +90,7 @@ export function persistRuntimeState(state: SwarmRunState): void {
     savedAt: new Date().toISOString(),
     state,
   };
-  const tempFile = path.join(RUNTIME_DIR, `current-state.${process.pid}.${Date.now()}.tmp`);
-  writeFileSync(tempFile, JSON.stringify(envelope, null, 2), "utf8");
-  if (existsSync(STATE_FILE)) {
-    rmSync(STATE_FILE, { force: true });
-  }
-  renameSync(tempFile, STATE_FILE);
+  atomicWriteJson(STATE_FILE, envelope);
 }
 
 export function loadPersistedRuntimeState(): PersistedStateSnapshot | null {
@@ -123,7 +128,12 @@ export function enqueueControlRequest(input: {
     round: input.round,
   };
   const filePath = path.join(CONTROL_QUEUE_DIR, controlFileName(request));
-  writeFileSync(filePath, JSON.stringify(request, null, 2), "utf8");
+  const fd = openSync(filePath, "wx");
+  try {
+    writeFileSync(fd, JSON.stringify(request, null, 2), "utf8");
+  } finally {
+    closeSync(fd);
+  }
   return request.id;
 }
 
@@ -136,7 +146,12 @@ export function readQueuedControlRequests(): QueuedControlRequest[] {
   const requests: QueuedControlRequest[] = [];
   for (const name of files) {
     const filePath = path.join(CONTROL_QUEUE_DIR, name);
-    const parsed = safeParseJson<ControlRequestBase>(readFileSync(filePath, "utf8"));
+    let parsed: ControlRequestBase | null = null;
+    try {
+      parsed = safeParseJson<ControlRequestBase>(readFileSync(filePath, "utf8"));
+    } catch {
+      continue;
+    }
     if (!parsed?.id || !parsed?.action || !parsed?.requestedAt) {
       rmSync(filePath, { force: true });
       continue;
@@ -179,6 +194,6 @@ export function completeControlRequest(
     metadata: result.metadata,
   };
   const outFile = path.join(CONTROL_HISTORY_DIR, controlFileName(request));
-  writeFileSync(outFile, JSON.stringify(handled, null, 2), "utf8");
+  atomicWriteJson(outFile, handled);
   rmSync(request.filePath, { force: true });
 }
