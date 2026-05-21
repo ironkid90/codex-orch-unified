@@ -7,10 +7,13 @@ const SECRET_PATTERNS: RegExp[] = [
   /\b(password|passwd|token|secret)\b\s*[:=]/gi,
 ];
 
+const JSON_FENCE_PATTERN = /```(?:json|JSON)\s*([\s\S]*?)```/g;
+
 export function verifyOutputSafety(text: string): string[] {
   const issues: string[] = [];
 
   for (const pattern of SECRET_PATTERNS) {
+    pattern.lastIndex = 0;
     if (pattern.test(text)) {
       issues.push(`Potential secret exposure matched pattern: ${pattern.source}`);
     }
@@ -21,24 +24,78 @@ export function verifyOutputSafety(text: string): string[] {
     issues.push("Malformed markdown fences detected (odd number of ``` tokens).");
   }
 
-  if (/^\s*{[\s\S]*}\s*$/m.test(text) && !hasBalancedBraces(text)) {
-    issues.push("Potential malformed JSON-like block detected (brace imbalance).");
+  if (looksLikeJsonDocument(text)) {
+    const jsonIssue = verifyJsonBlock(text, "JSON document");
+    if (jsonIssue) {
+      issues.push(jsonIssue);
+    }
+  }
+
+  JSON_FENCE_PATTERN.lastIndex = 0;
+  for (const match of text.matchAll(JSON_FENCE_PATTERN)) {
+    const jsonIssue = verifyJsonBlock(match[1] || "", "fenced JSON block");
+    if (jsonIssue) {
+      issues.push(jsonIssue);
+    }
   }
 
   return issues;
 }
 
-function hasBalancedBraces(text: string): boolean {
-  let depth = 0;
+export function verifyTextArtifactSafety(pathLabel: string, text: string): string[] {
+  return verifyOutputSafety(text).map((issue) => `${pathLabel}: ${issue}`);
+}
+
+function looksLikeJsonDocument(text: string): boolean {
+  const trimmed = text.trim();
+  return (trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"));
+}
+
+function verifyJsonBlock(text: string, label: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (!hasBalancedJsonDelimiters(trimmed)) {
+    return `Potential malformed ${label} detected (delimiter imbalance).`;
+  }
+  try {
+    JSON.parse(trimmed);
+    return null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `Potential malformed ${label} detected (${message}).`;
+  }
+}
+
+function hasBalancedJsonDelimiters(text: string): boolean {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
   for (const ch of text) {
-    if (ch === "{") {
-      depth += 1;
-    } else if (ch === "}") {
-      depth -= 1;
-      if (depth < 0) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = inString;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) {
+      continue;
+    }
+    if (ch === "{" || ch === "[") {
+      stack.push(ch);
+    } else if (ch === "}" || ch === "]") {
+      const open = stack.pop();
+      if ((ch === "}" && open !== "{") || (ch === "]" && open !== "[")) {
         return false;
       }
     }
   }
-  return depth === 0;
+  return stack.length === 0 && !inString;
 }

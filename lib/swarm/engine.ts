@@ -80,7 +80,7 @@ import type {
   SwarmRunState,
   SwarmRuntimeActivity,
 } from "./types";
-import { verifyOutputSafety } from "./verifier";
+import { verifyOutputSafety, verifyTextArtifactSafety } from "./verifier";
 // ---- Symphony integration: token accounting + workspace safety ----
 import {
   TokenTracker,
@@ -271,6 +271,11 @@ interface CheckpointManifest {
   round: number;
   createdAt: string;
   entries: Array<{ path: string; kind: "file" | "dir"; existed: boolean }>;
+}
+
+interface DeterministicVerificationResult {
+  passed: boolean;
+  issues: string[];
 }
 
 interface GeminiResearchConfig {
@@ -2296,6 +2301,8 @@ async function createCheckpoint(round: number, workspace: string): Promise<Check
   }
   await writeFile(path.join(dir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
 
+  await verifyCheckpointManifest(round, dir, manifest);
+
   const info: CheckpointInfo = {
     round,
     dir: normalizeRel(path.relative(PROJECT_ROOT, dir)),
@@ -2304,6 +2311,22 @@ async function createCheckpoint(round: number, workspace: string): Promise<Check
   };
   swarmStore.upsertCheckpoint(info);
   return info;
+}
+
+async function verifyCheckpointManifest(round: number, dir: string, manifest: CheckpointManifest): Promise<void> {
+  const manifestPath = path.join(dir, "manifest.json");
+  if (!(await pathExists(manifestPath))) {
+    throw new Error(`Checkpoint round ${round} manifest was not written.`);
+  }
+  for (const entry of manifest.entries) {
+    if (!entry.existed) {
+      continue;
+    }
+    const copiedPath = path.join(dir, entry.path);
+    if (!(await pathExists(copiedPath))) {
+      throw new Error(`Checkpoint round ${round} is missing copied target ${entry.path}.`);
+    }
+  }
 }
 
 async function restoreCheckpoint(round: number, workspace: string): Promise<number> {
@@ -2366,6 +2389,48 @@ async function runLint(round: number, workspace: string, roundDir: string, chang
     exitCode: result.exitCode,
     outputExcerpt: summarizeOutput(output, 5),
   };
+}
+
+function isTextArtifactPath(filePath: string): boolean {
+  return /\.(?:[cm]?[jt]sx?|json|jsonl|md|mdx|ya?ml|txt|env|toml|ps1|sh|css|scss|html)$/i.test(filePath);
+}
+
+async function runDeterministicChangedFileVerification(
+  round: number,
+  workspace: string,
+  changedFiles: string[],
+): Promise<DeterministicVerificationResult> {
+  const issues: string[] = [];
+  for (const rel of changedFiles) {
+    if (!isTextArtifactPath(rel)) {
+      continue;
+    }
+    const abs = path.join(workspace, rel);
+    if (!(await pathExists(abs))) {
+      continue;
+    }
+    try {
+      const st = await stat(abs);
+      if (!st.isFile() || st.size > 1_000_000) {
+        continue;
+      }
+      issues.push(...verifyTextArtifactSafety(rel, await readFile(abs, "utf8")));
+    } catch (error) {
+      issues.push(`${rel}: deterministic verifier could not read file (${error instanceof Error ? error.message : String(error)}).`);
+    }
+  }
+
+  for (const issue of issues) {
+    swarmStore.appendEvent({
+      type: "agent.safety",
+      round,
+      agentId: "worker1",
+      level: "error",
+      message: issue,
+    });
+  }
+
+  return { passed: issues.length === 0, issues };
 }
 
 function maybeCompress(text: string, enabled: boolean): string {
@@ -2629,14 +2694,15 @@ function deriveRoundStatus(
   worker2Decision: string | undefined,
   evaluatorStatus: string | undefined,
   lintPassed: boolean,
+  deterministicPassed = true,
 ): RoundStatus {
   if (coordinatorStatus === "FAIL") {
     return "FAIL";
   }
-  if (!lintPassed) {
+  if (!lintPassed || !deterministicPassed) {
     return "REVISE";
   }
-  const auditorOk = worker2Decision === "APPROVE" || worker2Decision === "SKIPPED_NO_CHANGES";
+  const auditorOk = worker2Decision === "APPROVE";
   if (coordinatorStatus === "PASS" && evaluatorStatus === "PASS" && auditorOk) {
     return "PASS";
   }
@@ -2691,9 +2757,10 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
   }
 
   let roundDir = "";
-  let lint: any = { passed: true, exitCode: 0, command: "disabled", ran: false };
+  let lint: LintResult = { round: 0, passed: true, exitCode: 0, command: "disabled", ran: false };
   let changedFiles: string[] = [];
   let worker2Skipped = false;
+  let deterministicVerification: DeterministicVerificationResult = { passed: true, issues: [] };
   let roundTokenBaseline: TokenUsage;
 
   const currentRunId = swarmStore.getState().runId;
@@ -2707,6 +2774,10 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
     onRoundStart: async (round) => {
       await processQueuedControlRequests(round);
       const fsStore = swarmStore.getState().features;
+      lint = { round, passed: true, exitCode: 0, command: "disabled", ran: false };
+      changedFiles = [];
+      worker2Skipped = false;
+      deterministicVerification = { passed: true, issues: [] };
       roundTokenBaseline = tokenTracker.getAggregateTotals();
       await waitIfPaused(round, "round_start");
       swarmStore.setCurrentRound(round);
@@ -2796,6 +2867,8 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
           metadata: { changedFiles: changedFiles.slice(0, 20) },
         });
 
+        deterministicVerification = await runDeterministicChangedFileVerification(round, opts.workspace, changedFiles);
+
         lint = fsStore.lintLoop
           ? await runLint(round, opts.workspace, roundDir, changedFiles)
           : { round, command: "disabled", ran: false, passed: true, exitCode: 0 };
@@ -2844,7 +2917,7 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
         if (fsStore.heuristicSelector && changedFiles.length === 0) {
           worker2Skipped = true;
           const outFile = path.join(roundDir, "worker2.md");
-          const text = "1) COVERAGE TABLE:\n- no tracked file changes\n\n2) DEFECTS:\n- none\n\n3) PERFORMANCE CHECK:\n- skipped\n\n4) DECISION: SKIPPED_NO_CHANGES";
+          const text = "1) COVERAGE TABLE:\n- no tracked file changes\n\n2) DEFECTS:\n- none\n\n3) PERFORMANCE CHECK:\n- skipped\n\n4) DECISION: APPROVE";
           await writeFile(outFile, text, "utf8");
           swarmStore.setAgentState("worker2", {
             phase: "completed",
@@ -2921,13 +2994,14 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
       prevFeedback = evaluator?.text || "";
 
       const coordStatus = parseCoordinatorStatus(coordinator?.text || "");
-      const worker2Decision = parseWorker2Decision(worker2?.text || "") || (worker2Skipped ? "SKIPPED_NO_CHANGES" : undefined);
+      const worker2Decision = parseWorker2Decision(worker2?.text || "");
       const evalStatus = parseEvaluatorStatus(evaluator?.text || "");
-      const finalStatus = deriveRoundStatus(coordStatus, worker2Decision, evalStatus, lint.passed);
+      const finalStatus = deriveRoundStatus(coordStatus, worker2Decision, evalStatus, lint.passed, deterministicVerification.passed);
 
       const notes: string[] = [];
-      if (worker2Decision) notes.push(`Worker-2 decision: ${worker2Decision}`);
-      if (evalStatus) notes.push(`Evaluator status: ${evalStatus}`);
+      notes.push(`Worker-2 decision: ${worker2Decision || "MISSING_VERDICT"}`);
+      notes.push(`Evaluator status: ${evalStatus || "MISSING_STATUS"}`);
+      notes.push(`Deterministic verification: ${deterministicVerification.passed ? "PASS" : `FAIL (${deterministicVerification.issues.length})`}`);
       notes.push(`Lint: ${lint.passed ? "PASS" : `FAIL (${lint.exitCode})`}`);
       notes.push(
         changedFiles.length === 0
@@ -2956,7 +3030,16 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
         type: "round.finished",
         round,
         message: `Round ${round} finished with ${finalStatus}.`,
-        metadata: { worker2Decision, evalStatus, coordStatus, lintPassed: lint.passed, roundTokenTotals, aggregateTokenTotals: tokenTracker.getAggregateTotals() },
+        metadata: {
+          worker2Decision,
+          evalStatus,
+          coordStatus,
+          lintPassed: lint.passed,
+          deterministicPassed: deterministicVerification.passed,
+          deterministicIssues: deterministicVerification.issues.slice(0, 20),
+          roundTokenTotals,
+          aggregateTokenTotals: tokenTracker.getAggregateTotals(),
+        },
       });
 
       carryW1Directives = mergeDirectiveLists(carryW1Directives, parseStructuredSection(evaluator?.text || "", "PROMPT_UPDATES_W1"), 10);
@@ -2967,7 +3050,13 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
       prevCoordinatorContext = { round, status: finalStatus, variant: selectedVariant };
 
       const defects = parseDefectSeverities(worker2?.text || "");
-      const shouldRewind = fsStore.checkpointing && round > 1 && (coordStatus === "FAIL" || (!lint.passed && (defects.high > 0 || defects.med > 0)));
+      const shouldRewind = fsStore.checkpointing && round > 1 && (
+        coordStatus === "FAIL" ||
+        worker2Decision === "REJECT" ||
+        evalStatus === "FAIL" ||
+        !deterministicVerification.passed ||
+        (!lint.passed && (defects.high > 0 || defects.med > 0))
+      );
 
       if (shouldRewind) {
         const targetRound = round - 1;
@@ -2979,7 +3068,7 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
           message: `Auto-rewind to checkpoint round ${targetRound}.`,
           metadata: { targetRound, restoredCount: restored },
         });
-        if (fsStore.humanInLoop || fsStore.checkpointing) {
+        if (fsStore.humanInLoop) {
           swarmStore.setPaused(true, `Auto-paused after rewind to round ${targetRound}.`);
           await waitIfPaused(round, "post_rewind_review");
         }
