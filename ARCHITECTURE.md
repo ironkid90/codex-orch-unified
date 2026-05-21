@@ -38,11 +38,11 @@ The `SwarmRuntime` interface exposes 6 methods:
 ## 2. Orchestration Topology
 
 ### Current model (implemented)
-- Fan-out/fan-in rounds:
+- Default graph-backed fan-out/fan-in rounds (`createDefaultSwarmGraph()`):
+  - `Planner` (entry planning and user request framing)
   - `Research` (context gathering)
-  - `Worker-1` (implementation)
-  - `Worker-2` (auditor, conditionally invoked)
-  - `Evaluator` (quality/process feedback)
+  - Parallel fan-out to `Worker-1` (implementation) and `Worker-2` (audit/coverage)
+  - Fan-in at `Evaluator` (quality/process feedback)
   - `Coordinator` (single or ensemble voting)
 - Runtime controls:
   - `pause` / `resume`
@@ -55,7 +55,7 @@ The `SwarmRuntime` interface exposes 6 methods:
   - CLI control plane (`scripts/swarm-cli.ts`) with pause/resume/rewind/status
 
 ### Planned model (next)
-- Explicit workflow graph object (node/edge definitions, dynamic branching metadata).
+- Richer graph editing and dynamic branching metadata beyond the default graph.
 - Optional cross-project routers for domain-specific agent pools.
 
 ## 3. Runtime Hardening

@@ -14,7 +14,7 @@ import type { SwarmRunState } from "./types";
 const DEFAULT_SIDECAR_URL = "http://127.0.0.1:8420";
 
 function getSidecarUrl(): string {
-  return process.env.ADK_SIDECAR_URL || DEFAULT_SIDECAR_URL;
+  return process.env.ADK_SIDECAR_URL || process.env.SWARM_ADK_SIDECAR_URL || DEFAULT_SIDECAR_URL;
 }
 
 /**
@@ -90,6 +90,7 @@ export class AdkRuntime implements SwarmRuntime {
       workspace: options?.workspace,
       mode: options?.mode,
       features: options?.features,
+      prompt: options?.prompt,
     });
 
     // Start a background poller that resolves when the sidecar run ends

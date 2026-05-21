@@ -2751,7 +2751,11 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
   if (!features.researchAgent) {
     graph.entryNodeId = "worker1";
     graph.nodes = graph.nodes.filter(n => n.id !== "research" && n.id !== "planner");
-    graph.edges = graph.edges.filter(e => e.from !== "research" && e.to !== "research" && e.from !== "planner" && e.to !== "planner");
+    graph.edges = [
+      { id: "research-disabled-e0", from: "worker1", to: "worker2", type: "sequential", label: "implementation handoff" },
+      { id: "research-disabled-e1", from: "worker2", to: "evaluator", type: "sequential", label: "audit evidence" },
+      { id: "research-disabled-e2", from: "evaluator", to: "coordinator", type: "sequential", label: "decision" },
+    ];
   } else {
     graph.entryNodeId = "planner"; // Ensure planner is entry
   }
@@ -2908,6 +2912,9 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
 
       if (node.id === "worker2") {
         const worker1 = context["worker1"];
+        const worker1Output = worker1?.text
+          ? maybeCompress(worker1.text, fsStore.contextCompression)
+          : "(Worker-1 has not completed in this fan-out branch; audit against research, carry-over directives, and repository state.)";
         const nextActionAssignments = assignNextActions(carryNextActions);
         const worker2DirectiveSuffix = [
           formatDirectiveBlock("PREVIOUS EVALUATOR DIRECTIVES (WORKER-2 ONLY)", carryW2Directives),
@@ -2935,8 +2942,8 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
         const worker2 = await runAgentTask({
           agentId: "worker2",
           round,
-          prompt: `${baseW2}${researchSuffix}${batchArtifactSuffix}${worker2DirectiveSuffix}\n\n--- TRACKED CHANGED FILES ---\n${changedFiles.length ? changedFiles.join("\n") : "(none)"
-            }\n\n--- WORKER-1 OUTPUT ---\n${maybeCompress(worker1?.text || "", fsStore.contextCompression)}`,
+          prompt: `${baseW2}${researchSuffix}${batchArtifactSuffix}${worker2DirectiveSuffix}\n\n--- TRACKED CHANGED FILES ---\n${changedFiles.length ? changedFiles.join("\n") : "(not available yet in parallel fan-out)"
+            }\n\n--- WORKER-1 OUTPUT ---\n${worker1Output}`,
           outFile: path.join(roundDir, "worker2.md"),
           workspace: opts.workspace,
           mode: opts.mode,

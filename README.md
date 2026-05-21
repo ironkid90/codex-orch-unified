@@ -13,7 +13,7 @@ Additional optional sidecar: Microsoft Agent Framework workflow in `foundry_agen
 
 ## Core Features
 
-- Fan-out/fan-in orchestration loop: `research` → `worker1` → `worker2` → `evaluator` → `coordinator`
+- Graph-backed fan-out/fan-in orchestration loop: `planner` → `research` → (`worker1` + `worker2`) → `evaluator` → `coordinator`
 - Next.js dashboard with SSE live updates (`app/page.tsx`)
 - API control endpoints (`app/api/swarm/*`)
 - Terminal control surface (`scripts/swarm-cli.ts`)
@@ -47,7 +47,6 @@ What is implemented now:
 What is not implemented yet:
 
 - ADK Python sidecar HTTP server (the client adapter is ready, but `adk_prototype/` needs to expose the matching HTTP API)
-- No graph DSL executor wired into the active runtime
 - No AKS-native GitOps/workflow/model-serving lane yet (that is the planned phase-2 path)
 - No full CI/test hardening for the orchestration layer
 
@@ -104,7 +103,10 @@ If required MCP/API settings are missing, the dashboard **Control Center** promp
 
 ```bash
 npm run swarm:run -- --mode local --max-rounds 3
+npm run swarm:run -- --runtime custom --mode demo --max-rounds 1
 ```
+
+To target the ADK adapter, run the matching sidecar first, set `ADK_SIDECAR_URL` if it is not listening on `http://127.0.0.1:8420`, then use `--runtime adk` or `SWARM_RUNTIME=adk`.
 
 ### 5. Observe and control the active run
 
@@ -113,6 +115,7 @@ npm run swarm:status
 npm run swarm:pause
 npm run swarm:resume
 npm run swarm:rewind -- --round 2
+npm run swarm:pause -- --runtime adk --reason "Review ADK run"
 ```
 
 PowerShell entrypoint equivalents:
@@ -134,6 +137,17 @@ PowerShell entrypoint equivalents:
 - Azure worker loop: `npm run swarm:worker`
 
 The Foundry path is optional and does not power the primary Codex swarm loop.
+
+## Default Topology
+
+The built-in custom runtime uses `lib/swarm/graph-dsl.ts#createDefaultSwarmGraph()` and persists graph execution state under `runs/_runtime/graph-state/`:
+
+```text
+Planner -> Research -> Worker-1 ----\
+                    \-> Worker-2 ----> Evaluator -> Coordinator
+```
+
+`Worker-1` owns implementation, `Worker-2` owns audit/coverage, `Evaluator` merges quality feedback, and `Coordinator` produces the final round decision. When `--no-researchAgent` is used, the runtime falls back to a sequential Worker-1 -> Worker-2 -> Evaluator -> Coordinator graph.
 
 ## Azure Container Apps Baseline
 

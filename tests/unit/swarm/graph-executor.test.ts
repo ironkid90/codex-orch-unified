@@ -8,21 +8,23 @@ describe("GraphExecutor", () => {
 
   it("initial state starts at entry node", () => {
     const state = executor.createInitialState("run-1");
-    expect(state.currentNodeIds).toContain("research");
+    expect(state.currentNodeIds).toContain("planner");
     expect(state.status).toBe("running");
   });
 
-  it("getExecutionOrder starts with research", () => {
+  it("getExecutionOrder starts with planner", () => {
     const order = executor.getExecutionOrder();
-    expect(order[0]).toBe("research");
+    expect(order[0]).toBe("planner");
     expect(order[order.length - 1]).toBe("coordinator");
   });
 
-  it("advancing from research queues worker1", () => {
+  it("advancing from research fans out to both workers", () => {
     let state = executor.createInitialState("run-2");
+    state = executor.advanceState(state, "planner", { nodeId: "planner", status: "completed" });
     state = executor.advanceState(state, "research", { nodeId: "research", status: "completed" });
     expect(state.completedNodeIds).toContain("research");
     expect(state.currentNodeIds).toContain("worker1");
+    expect(state.currentNodeIds).toContain("worker2");
   });
 
   it("isComplete is false initially", () => {

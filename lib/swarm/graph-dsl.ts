@@ -24,22 +24,25 @@ export function serializeGraph(graph: WorkflowGraph): string {
 
 export function createDefaultSwarmGraph(): WorkflowGraph {
   const nodes: GraphNode[] = [
-    { id: "planner",     type: "agent", label: "Planner",     agentRole: "Planner"     },
-    { id: "research",    type: "agent", label: "Research",    agentRole: "Research"    },
-    { id: "worker1",     type: "agent", label: "Worker-1",    agentRole: "Worker-1"    },
-    { id: "worker2",     type: "agent", label: "Worker-2",    agentRole: "Worker-2"    },
-    { id: "evaluator",   type: "agent", label: "Evaluator",   agentRole: "Evaluator"   },
-    { id: "coordinator", type: "agent", label: "Coordinator", agentRole: "Coordinator" },
+    { id: "planner",     type: "agent", label: "Planner",     agentRole: "Planner",     metadata: { topologyRole: "entry" } },
+    { id: "research",    type: "agent", label: "Research",    agentRole: "Research",    metadata: { topologyRole: "context" } },
+    { id: "worker1",     type: "agent", label: "Worker-1",    agentRole: "Worker-1",    metadata: { topologyRole: "fan-out-worker" } },
+    { id: "worker2",     type: "agent", label: "Worker-2",    agentRole: "Worker-2",    metadata: { topologyRole: "fan-out-worker" } },
+    { id: "evaluator",   type: "agent", label: "Evaluator",   agentRole: "Evaluator",   metadata: { topologyRole: "fan-in-review" } },
+    { id: "coordinator", type: "agent", label: "Coordinator", agentRole: "Coordinator", metadata: { topologyRole: "fan-in-decision" } },
   ];
   const edges: GraphEdge[] = [
-    { id: "e0", from: "planner",   to: "research",    type: "sequential" },
-    { id: "e1", from: "research",  to: "worker1",     type: "sequential" },
-    { id: "e2", from: "worker1",   to: "worker2",     type: "sequential" },
-    { id: "e3", from: "worker2",   to: "evaluator",   type: "sequential" },
-    { id: "e4", from: "evaluator", to: "coordinator", type: "sequential" },
+    { id: "e0", from: "planner",   to: "research",    type: "sequential", label: "plan" },
+    { id: "e1", from: "research",  to: "worker1",     type: "parallel",   label: "fan-out implementation" },
+    { id: "e2", from: "research",  to: "worker2",     type: "parallel",   label: "fan-out audit" },
+    { id: "e3", from: "worker1",   to: "evaluator",   type: "sequential", label: "implementation evidence" },
+    { id: "e4", from: "worker2",   to: "evaluator",   type: "sequential", label: "audit evidence" },
+    { id: "e5", from: "evaluator", to: "coordinator", type: "sequential", label: "fan-in decision" },
   ];
   return {
     id: "default-swarm-graph", name: "Default Swarm Workflow", version: "1.0.0",
+    description: "Core fan-out/fan-in topology: Planner -> Research -> (Worker-1, Worker-2) -> Evaluator -> Coordinator.",
     nodes, edges, entryNodeId: "planner", exitNodeIds: ["coordinator"],
+    metadata: { topology: "fan-out/fan-in", roles: ["Research", "Worker-1", "Worker-2", "Evaluator", "Coordinator"] },
   };
 }

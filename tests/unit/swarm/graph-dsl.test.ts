@@ -11,12 +11,24 @@ describe("graph-dsl", () => {
     expect(g.edges).toHaveLength(0);
   });
 
-  it("createDefaultSwarmGraph returns 5 nodes and 4 edges", () => {
+  it("createDefaultSwarmGraph returns the core fan-out/fan-in topology", () => {
     const g = createDefaultSwarmGraph();
-    expect(g.nodes).toHaveLength(5);
-    expect(g.edges).toHaveLength(4);
-    expect(g.entryNodeId).toBe("research");
+    expect(g.nodes).toHaveLength(6);
+    expect(g.edges).toHaveLength(6);
+    expect(g.entryNodeId).toBe("planner");
     expect(g.exitNodeIds).toContain("coordinator");
+    expect(g.nodes.map((node) => node.label)).toEqual([
+      "Planner",
+      "Research",
+      "Worker-1",
+      "Worker-2",
+      "Evaluator",
+      "Coordinator",
+    ]);
+    expect(g.edges.filter((edge) => edge.type === "parallel").map((edge) => edge.to).sort()).toEqual([
+      "worker1",
+      "worker2",
+    ]);
   });
 
   it("validateGraph rejects missing entryNodeId", () => {

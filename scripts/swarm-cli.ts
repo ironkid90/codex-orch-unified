@@ -210,19 +210,33 @@ function printUsage(): void {
   console.log("  models [discover|optimize|evaluate|show]");
   console.log("                              Multi-provider model evaluation and role routing");
   console.log("  run [--max-rounds N]        Run swarm in terminal (interactive controls)");
-  console.log("      [--mode local|demo] [--workspace PATH]");
+  console.log("      [--mode local|demo] [--runtime custom|adk] [--workspace PATH]");
   console.log("      [--no-lintLoop --no-ensembleVoting --no-researchAgent --no-contextCompression]");
   console.log("      [--no-heuristicSelector --no-checkpointing --no-humanInLoop --no-approveNextActionGate]");
   console.log("      [--non-interactive]");
   console.log("  status                      Show the latest persisted swarm state");
-  console.log("  pause [--reason TEXT]       Pause the active swarm runner");
-  console.log("  resume                      Resume the active swarm runner");
-  console.log("  rewind <round>              Rewind to a checkpoint (run must be paused)");
+  console.log("  pause [--runtime custom|adk] [--reason TEXT]");
+  console.log("                              Pause the active swarm runner");
+  console.log("  resume [--runtime custom|adk]");
+  console.log("                              Resume the active swarm runner");
+  console.log("  rewind <round> [--runtime custom|adk]");
+  console.log("                              Rewind to a checkpoint (run must be paused)");
   console.log("      [--round N]");
   console.log("  deploy [--target azure|vercel]");
   console.log("      Azure is the default target and runs `azd deploy` from the repo root.");
   console.log("      Use --environment NAME to select an azd environment and --provision to run `azd provision` first.");
   console.log("      Use --target vercel [--path PATH] [--prod] for the optional demo deploy path.");
+}
+
+function applyRuntimeFlag(flags: Map<string, string | boolean>): void {
+  const runtime = flagString(flags, "runtime", "").toLowerCase();
+  if (!runtime) {
+    return;
+  }
+  if (runtime !== "custom" && runtime !== "adk") {
+    throw new Error(`Unsupported runtime: ${runtime}. Use custom or adk.`);
+  }
+  process.env.SWARM_RUNTIME = runtime;
 }
 
 async function ensureVercelAuth(ask?: (q: string) => Promise<string>): Promise<boolean> {
@@ -597,6 +611,7 @@ async function controlCommand(
   flags: Map<string, string | boolean>,
   positionals: string[],
 ): Promise<void> {
+  applyRuntimeFlag(flags);
   const requestedRound =
     action === "rewind"
       ? Number(flagString(flags, "round", positionals[0] || ""))
@@ -623,6 +638,7 @@ async function controlCommand(
 }
 
 async function runCommandInteractive(flags: Map<string, string | boolean>): Promise<void> {
+  applyRuntimeFlag(flags);
   const mode = (flagString(flags, "mode", "local") as RunMode) || "local";
   const maxRounds = flagNumber(flags, "max-rounds", 3);
   const workspace = flagString(flags, "workspace", ROOT);
