@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { requireDashboardMutationAuth } from "@/app/api/_lib/require-dashboard-mutation-auth";
 import { resolveDashboardWorkspace } from "@/lib/swarm/dashboard-workspaces";
 import { createGitCommit, type CommitDraft } from "@/lib/swarm/git-ops";
 
@@ -30,6 +31,11 @@ function parseCommitPayload(value: unknown): CommitPayload {
 }
 
 export async function POST(request: NextRequest) {
+  const authError = requireDashboardMutationAuth(request);
+  if (authError) {
+    return authError;
+  }
+
   try {
     const body = await request.json().catch(() => ({}));
     const payload = parseCommitPayload(body);
@@ -54,4 +60,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

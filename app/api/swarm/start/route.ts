@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
+import { requireDashboardMutationAuth } from "@/app/api/_lib/require-dashboard-mutation-auth";
 import { inspectControlCenter } from "@/lib/swarm/control-center";
 import { resolveDashboardWorkspace } from "@/lib/swarm/dashboard-workspaces";
 import { getRuntime } from "@/lib/swarm/runtime";
@@ -23,7 +24,12 @@ interface StartPayload {
   prompt?: string;
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const authError = requireDashboardMutationAuth(request);
+  if (authError) {
+    return authError;
+  }
+
   const runtime = await getRuntime();
   const currentState = isAzurePersistenceEnabled()
     ? await swarmStore.syncFromRemote()

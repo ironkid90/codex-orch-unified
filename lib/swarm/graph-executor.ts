@@ -158,7 +158,12 @@ export class GraphExecutor {
 
     for (let round = 1; round <= maxRounds; round++) {
       if (this.config?.onRoundStart) {
-        await this.config.onRoundStart(round);
+        const startDecision = await this.config.onRoundStart(round);
+        if (startDecision?.restartFromRound !== undefined) {
+          accumulatedContext = startDecision.context ?? {};
+          round = Math.max(1, startDecision.restartFromRound) - 1;
+          continue;
+        }
       }
 
       let state = this.createInitialState(runId);
@@ -201,17 +206,38 @@ export class GraphExecutor {
       accumulatedContext = state.context || {};
 
       if (this.config?.onRoundEnd) {
-        const shouldContinue = await this.config.onRoundEnd(round, accumulatedContext);
-        if (!shouldContinue) break;
+        const endDecision = await this.config.onRoundEnd(round, accumulatedContext);
+        if (typeof endDecision === "boolean") {
+          if (!endDecision) break;
+          continue;
+        }
+        if (!endDecision.continue) {
+          break;
+        }
+        if (endDecision.restartFromRound !== undefined) {
+          accumulatedContext = endDecision.context ?? {};
+          round = Math.max(1, endDecision.restartFromRound) - 1;
+        }
       }
     }
   }
 }
 
+export interface RoundStartDecision {
+  restartFromRound: number;
+  context?: Record<string, any>;
+}
+
+export interface RoundEndDecision {
+  continue: boolean;
+  restartFromRound?: number;
+  context?: Record<string, any>;
+}
+
 export interface GraphRunConfig {
   executeNode: (node: GraphNode, context: Record<string, any>, round: number) => Promise<NodeExecutionResult>;
   onNodeComplete?: (nodeId: string, result: NodeExecutionResult, round: number) => Promise<void>;
-  onRoundStart?: (round: number) => Promise<void>;
-  onRoundEnd?: (round: number, context: Record<string, any>) => Promise<boolean>;
+  onRoundStart?: (round: number) => Promise<RoundStartDecision | void>;
+  onRoundEnd?: (round: number, context: Record<string, any>) => Promise<boolean | RoundEndDecision>;
   onStateChange?: (state: GraphExecutionState) => void;
 }

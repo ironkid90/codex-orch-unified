@@ -1,4 +1,6 @@
-import { describe, it, expect } from "vitest";
+import assert from "node:assert/strict";
+import test from "node:test";
+
 import { fileRunHistoryStore, type RunHistoryEntry } from "../../../lib/swarm/run-history";
 
 const sampleEntry: RunHistoryEntry = {
@@ -15,25 +17,23 @@ const sampleEntry: RunHistoryEntry = {
   errors: [],
 };
 
-describe("RunHistoryStore", () => {
-  it("saves and retrieves an entry", async () => {
-    await fileRunHistoryStore.save(sampleEntry);
-    const retrieved = await fileRunHistoryStore.getById("test-run-001");
-    expect(retrieved?.runId).toBe("test-run-001");
-    expect(retrieved?.status).toBe("completed");
-  });
+test("RunHistoryStore saves and retrieves an entry", async () => {
+  await fileRunHistoryStore.save(sampleEntry);
+  const retrieved = await fileRunHistoryStore.getById("test-run-001");
+  assert.equal(retrieved?.runId, "test-run-001");
+  assert.equal(retrieved?.status, "completed");
+});
 
-  it("returns null for unknown runId", async () => {
-    expect(await fileRunHistoryStore.getById("no-such-run")).toBeNull();
-  });
+test("RunHistoryStore returns null for unknown runId", async () => {
+  assert.equal(await fileRunHistoryStore.getById("no-such-run"), null);
+});
 
-  it("list returns an array", async () => {
-    expect(Array.isArray(await fileRunHistoryStore.list(10))).toBe(true);
-  });
+test("RunHistoryStore list returns an array", async () => {
+  assert.equal(Array.isArray(await fileRunHistoryStore.list(10)), true);
+});
 
-  it("getAnalytics has valid shape", async () => {
-    const a = await fileRunHistoryStore.getAnalytics();
-    expect(typeof a.totalRuns).toBe("number");
-    expect(typeof a.successRate).toBe("number");
-  });
+test("RunHistoryStore getAnalytics has valid shape", async () => {
+  const analytics = await fileRunHistoryStore.getAnalytics();
+  assert.equal(typeof analytics.totalRuns, "number");
+  assert.equal(typeof analytics.successRate, "number");
 });

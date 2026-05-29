@@ -1,8 +1,9 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
+import { requireDashboardMutationAuth } from "@/app/api/_lib/require-dashboard-mutation-auth";
 import {
   buildRoutingAssignmentDiff,
   buildRoutingProviderCatalog,
@@ -64,7 +65,12 @@ export async function GET() {
   }
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const authError = requireDashboardMutationAuth(request);
+  if (authError) {
+    return authError;
+  }
+
   try {
     const body = (await request.json()) as {
       assignments?: Record<string, RoutingPreference>;

@@ -137,3 +137,28 @@ test("git commit route rejects empty commit messages", async () => {
   }
 });
 
+test("git commit route rejects remote mutation requests without an operator token", async () => {
+  const workspace = createIsolatedWorkspaceRepo("git-commit-remote-");
+  try {
+    writeFileSync(path.join(workspace, "notes.txt"), "hello\n", "utf8");
+
+    const commitRoute = await loadRouteModule("app/api/swarm/git/commit/route.ts");
+    const commitResponse = await commitRoute.POST(
+      new NextRequest("https://example.com/api/swarm/git/commit", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          workspace,
+          message: "Add notes",
+          files: ["notes.txt"],
+        }),
+      }),
+    );
+    const commitPayload = await commitResponse.json();
+
+    assert.equal(commitResponse.status, 503);
+    assert.match(commitPayload.error, /DASHBOARD_OPERATOR_TOKEN/i);
+  } finally {
+    rmSync(workspace, { force: true, recursive: true });
+  }
+});

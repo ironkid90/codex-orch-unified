@@ -116,6 +116,7 @@ class SwarmStore {
   private readonly emitter = new EventEmitter();
   private state = createInitialState();
   private eventCounter = 0;
+  private pendingRewindRound: number | null = null;
 
   constructor() {
     this.hydrateFromDisk();
@@ -204,6 +205,7 @@ class SwarmStore {
     const features: SwarmFeatures = { ...DEFAULT_FEATURES, ...opts.features };
     const runId = randomUUID();
     const startedAt = new Date().toISOString();
+    this.pendingRewindRound = null;
     this.state = {
       runId,
       mode: opts.mode,
@@ -237,6 +239,7 @@ class SwarmStore {
   }
 
   finishRun(message = "Swarm run completed."): void {
+    this.pendingRewindRound = null;
     this.state.running = false;
     this.state.paused = false;
     this.state.pauseReason = undefined;
@@ -261,6 +264,7 @@ class SwarmStore {
   }
 
   failRun(error: unknown): void {
+    this.pendingRewindRound = null;
     this.state.running = false;
     this.state.paused = false;
     this.state.pauseReason = undefined;
@@ -288,6 +292,7 @@ class SwarmStore {
   forceReset(reason?: string): void {
     const previousRunId = this.state.runId;
     const previousStartedAt = this.state.startedAt;
+    this.pendingRewindRound = null;
     this.state = createInitialState();
     this.persistSnapshot();
 
@@ -324,6 +329,35 @@ class SwarmStore {
   setCurrentRound(round: number): void {
     this.state.currentRound = round;
     this.persistSnapshot();
+  }
+
+  rewindToRound(round: number, reason?: string): void {
+    this.state.currentRound = round;
+    this.state.rounds = this.state.rounds.filter((item) => item.round < round);
+    this.state.checkpoints = this.state.checkpoints.filter((item) => item.round <= round);
+    this.state.messages = this.state.messages.filter((item) => item.round < round);
+    this.state.lintResults = this.state.lintResults.filter((item) => item.round < round);
+    this.state.ensembles = this.state.ensembles.filter((item) => item.round < round);
+    this.state.events = this.state.events.filter((event) => event.round === 0 || event.round < round);
+    this.state.agents = createAgentDefaults();
+    this.state.activity = {
+      ...createRuntimeActivityDefaults(),
+      lastHeartbeatAt: new Date().toISOString(),
+    };
+    if (this.state.paused) {
+      this.state.pauseReason = reason || `Rewound to round ${round}. Resume to continue.`;
+    }
+    this.persistSnapshot();
+  }
+
+  markPendingRewindRound(round: number): void {
+    this.pendingRewindRound = round;
+  }
+
+  consumePendingRewindRound(): number | null {
+    const round = this.pendingRewindRound;
+    this.pendingRewindRound = null;
+    return round;
   }
 
   setAgentState(agentId: AgentId, patch: Partial<SwarmRunState["agents"][AgentId]>): void {

@@ -73,14 +73,21 @@ export interface SwarmRuntime {
 
 export type RuntimeKind = "custom" | "adk";
 
-const registry = new Map<RuntimeKind, () => SwarmRuntime | Promise<SwarmRuntime>>();
+type RuntimeFactory = () => SwarmRuntime | Promise<SwarmRuntime>;
+type RuntimeGlobals = typeof globalThis & {
+  __codexSwarmRuntimeRegistry?: Map<RuntimeKind, RuntimeFactory>;
+  __codexSwarmRuntimeCached?: SwarmRuntime | null;
+  __codexSwarmRuntimeCachedKind?: RuntimeKind | null;
+};
 
-export function registerRuntime(kind: RuntimeKind, factory: () => SwarmRuntime | Promise<SwarmRuntime>): void {
+const runtimeGlobals = globalThis as RuntimeGlobals;
+const registry =
+  runtimeGlobals.__codexSwarmRuntimeRegistry ??
+  (runtimeGlobals.__codexSwarmRuntimeRegistry = new Map<RuntimeKind, RuntimeFactory>());
+
+export function registerRuntime(kind: RuntimeKind, factory: RuntimeFactory): void {
   registry.set(kind, factory);
 }
-
-let cached: SwarmRuntime | null = null;
-let cachedKind: RuntimeKind | null = null;
 
 /**
  * Resolve the active runtime based on `SWARM_RUNTIME` env var.
@@ -88,6 +95,8 @@ let cachedKind: RuntimeKind | null = null;
  */
 export async function getRuntime(): Promise<SwarmRuntime> {
   const kind = (process.env.SWARM_RUNTIME || "custom") as RuntimeKind;
+  const cached = runtimeGlobals.__codexSwarmRuntimeCached ?? null;
+  const cachedKind = runtimeGlobals.__codexSwarmRuntimeCachedKind ?? null;
 
   if (cached && cachedKind === kind) {
     return cached;
@@ -100,30 +109,32 @@ export async function getRuntime(): Promise<SwarmRuntime> {
     );
   }
 
-  cached = await factory();
-  cachedKind = kind;
-  return cached;
+  const runtime = await factory();
+  runtimeGlobals.__codexSwarmRuntimeCached = runtime;
+  runtimeGlobals.__codexSwarmRuntimeCachedKind = kind;
+  return runtime;
 }
 
 /** Reset cached runtime (useful for tests). */
 export function resetRuntimeCache(): void {
-  cached = null;
-  cachedKind = null;
+  runtimeGlobals.__codexSwarmRuntimeCached = null;
+  runtimeGlobals.__codexSwarmRuntimeCachedKind = null;
 }
 
 // ── Auto-register built-in runtimes ─────────────────────────────────
 
 // Custom runtime (always available — it's the built-in engine)
-registerRuntime("custom", () => {
-  // Lazy import to avoid pulling the full engine into contexts that don't need it
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { CustomRuntime } = require("./runtime-custom") as typeof import("./runtime-custom");
-  return new CustomRuntime();
-});
+if (!registry.has("custom")) {
+  registerRuntime("custom", async () => {
+    const { CustomRuntime } = await import("./runtime-custom");
+    return new CustomRuntime();
+  });
+}
 
 // ADK runtime (available when the Python sidecar is configured)
-registerRuntime("adk", () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { AdkRuntime } = require("./runtime-adk") as typeof import("./runtime-adk");
-  return new AdkRuntime();
-});
+if (!registry.has("adk")) {
+  registerRuntime("adk", async () => {
+    const { AdkRuntime } = await import("./runtime-adk");
+    return new AdkRuntime();
+  });
+}

@@ -163,7 +163,7 @@ export function AntigravityPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           assignments: draftAssignments,
-          statusModels: status.models,
+          statusModels: status?.models ?? [],
         }),
       });
       const payload = await response.json();
