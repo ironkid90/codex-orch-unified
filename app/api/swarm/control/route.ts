@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
+import { requireDashboardMutationAuth } from "@/app/api/_lib/require-dashboard-mutation-auth";
 import { isAzurePersistenceEnabled } from "@/lib/swarm/azure-contract";
 import { getRuntime } from "@/lib/swarm/runtime";
 import type { ControlAction } from "@/lib/swarm/runtime";
@@ -14,7 +15,12 @@ interface ControlPayload {
   round?: number;
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const authError = requireDashboardMutationAuth(request);
+  if (authError) {
+    return authError;
+  }
+
   let payload: ControlPayload = {};
   try {
     payload = (await request.json()) as ControlPayload;

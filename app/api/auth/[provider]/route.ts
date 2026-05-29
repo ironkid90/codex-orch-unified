@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { requireDashboardMutationAuth } from "@/app/api/_lib/require-dashboard-mutation-auth";
 import { providerAuthManager } from "@/lib/providers/auth-manager";
 import type { ProviderType } from "@/lib/providers/types";
 import { resolveDashboardWorkspace } from "@/lib/swarm/dashboard-workspaces";
@@ -73,6 +74,11 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ provider: string }> },
 ) {
+  const authError = requireDashboardMutationAuth(request);
+  if (authError) {
+    return authError;
+  }
+
   try {
     const { provider } = await params;
     const workspaceRoot = await resolveDashboardWorkspace({

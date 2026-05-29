@@ -221,3 +221,69 @@ test("control-center route inspects and updates the selected workspace instead o
     rmSync(selectedWorkspace, { force: true, recursive: true });
   }
 });
+
+test("start route rejects remote mutation requests without an operator token", async () => {
+  const previousRuntime = process.env.SWARM_RUNTIME;
+  process.env.SWARM_RUNTIME = "custom";
+
+  registerRuntime("custom", () => ({
+    name: "test-runtime",
+    startRun() {
+      throw new Error("startRun should not be called for unauthorized requests");
+    },
+    getActiveRunPromise() {
+      return null;
+    },
+    pauseRun() {
+      return false;
+    },
+    resumeRun() {
+      return false;
+    },
+    async rewindToRound() {
+      return { round: 0, restoredCount: 0 };
+    },
+    async requestControl() {
+      throw new Error("not implemented in test");
+    },
+  }));
+  resetRuntimeCache();
+
+  try {
+    const route = await loadRouteModule("app/api/swarm/start/route.ts");
+    const response = await route.POST(
+      new NextRequest("https://example.com/api/swarm/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: "run remotely" }),
+      }),
+    );
+    const payload = await response.json();
+
+    assert.equal(response.status, 503);
+    assert.match(payload.error, /DASHBOARD_OPERATOR_TOKEN/i);
+  } finally {
+    if (previousRuntime === undefined) {
+      delete process.env.SWARM_RUNTIME;
+    } else {
+      process.env.SWARM_RUNTIME = previousRuntime;
+    }
+    restoreDefaultCustomRuntime();
+    swarmStore.forceReset("test cleanup");
+  }
+});
+
+test("control-center route rejects remote mutation requests without an operator token", async () => {
+  const route = await loadRouteModule("app/api/swarm/control-center/route.ts");
+  const response = await route.POST(
+    new NextRequest("https://example.com/api/swarm/control-center", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ env: { OPENAI_API_KEY: "sk-remote" } }),
+    }),
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 503);
+  assert.match(payload.error, /DASHBOARD_OPERATOR_TOKEN/i);
+});

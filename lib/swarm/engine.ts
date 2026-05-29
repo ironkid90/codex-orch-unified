@@ -512,6 +512,10 @@ async function processQueuedControlRequests(round: number): Promise<void> {
       if (!Number.isFinite(requestedRound)) {
         throw new Error("A valid rewind round is required.");
       }
+      const currentState = swarmStore.getState();
+      if (!isSafeRewindBoundary(currentState)) {
+        throw new Error("Rewind can only be applied while paused at a round boundary.");
+      }
       const rewind = await rewindSwarmToRound(Math.max(1, Math.floor(requestedRound)));
       const message = `Rewind to round ${rewind.round} applied ${sourceLabel}.`;
       await completeQueuedControlRequestForRunner(request, {
@@ -642,6 +646,14 @@ function updateRuntimeActivity(patch: Partial<SwarmRuntimeActivity>, emit = true
 
 function canApplyControlImmediately(state: SwarmRunState): boolean {
   return !state.activity.activeAgentId && !state.activity.activeStep && !state.activity.activeGate;
+}
+
+function isSafeRewindBoundary(state: SwarmRunState): boolean {
+  return (
+    canApplyControlImmediately(state) ||
+    state.activity.activeGate === "round_start" ||
+    state.activity.activeGate === "post_rewind_review"
+  );
 }
 
 function beginRuntimeHeartbeat(agentId: AgentId, activeStep: string): () => void {
@@ -2276,9 +2288,13 @@ function diffFingerprints(before: Map<string, string>, after: Map<string, string
   return [...changed].sort();
 }
 
-async function createCheckpoint(round: number, workspace: string): Promise<CheckpointInfo> {
-  await mkdir(CHECKPOINTS_DIR, { recursive: true });
-  const dir = path.join(CHECKPOINTS_DIR, `round-${round}`);
+function getCheckpointDirectory(runId: string, round: number): string {
+  return path.join(CHECKPOINTS_DIR, runId, `round-${round}`);
+}
+
+async function createCheckpoint(round: number, workspace: string, runId: string): Promise<CheckpointInfo> {
+  await mkdir(path.join(CHECKPOINTS_DIR, runId), { recursive: true });
+  const dir = getCheckpointDirectory(runId, round);
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
 
@@ -2329,8 +2345,8 @@ async function verifyCheckpointManifest(round: number, dir: string, manifest: Ch
   }
 }
 
-async function restoreCheckpoint(round: number, workspace: string): Promise<number> {
-  const dir = path.join(CHECKPOINTS_DIR, `round-${round}`);
+async function restoreCheckpoint(round: number, workspace: string, runId: string): Promise<number> {
+  const dir = getCheckpointDirectory(runId, round);
   const manifestPath = path.join(dir, "manifest.json");
   if (!(await pathExists(manifestPath))) {
     throw new Error(`Checkpoint round ${round} not found.`);
@@ -2717,6 +2733,15 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
   let carryW2Directives: string[] = [];
   let carryCoordinatorRules: string[] = [];
   let carryNextActions: string[] = [];
+  const continuitySnapshots = new Map<number, {
+    prevFeedback: string;
+    prevCoordinatorContext: CoordinatorContinuityContext | null;
+    carryW1Directives: string[];
+    carryW2Directives: string[];
+    carryCoordinatorRules: string[];
+    carryNextActions: string[];
+  }>();
+  const contextSnapshots = new Map<number, Record<string, unknown>>();
   const routingConfig = await loadRoutingConfig(opts.workspace);
   const roleExecutions = Object.fromEntries(
     AGENT_IDS.map((agentId) => [agentId, resolveRoleExecution(agentId, routingConfig)]),
@@ -2768,6 +2793,47 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
   let roundTokenBaseline: TokenUsage;
 
   const currentRunId = swarmStore.getState().runId;
+  if (!currentRunId) {
+    throw new Error("Cannot start the swarm loop without an active run ID.");
+  }
+
+  function snapshotContinuityState() {
+    return {
+      prevFeedback,
+      prevCoordinatorContext: prevCoordinatorContext ? { ...prevCoordinatorContext } : null,
+      carryW1Directives: [...carryW1Directives],
+      carryW2Directives: [...carryW2Directives],
+      carryCoordinatorRules: [...carryCoordinatorRules],
+      carryNextActions: [...carryNextActions],
+    };
+  }
+
+  function restoreContinuityState(round: number): void {
+    const snapshot = continuitySnapshots.get(round);
+    if (!snapshot) {
+      prevFeedback = "";
+      prevCoordinatorContext = null;
+      carryW1Directives = [];
+      carryW2Directives = [];
+      carryCoordinatorRules = [];
+      carryNextActions = [];
+      return;
+    }
+
+    prevFeedback = snapshot.prevFeedback;
+    prevCoordinatorContext = snapshot.prevCoordinatorContext ? { ...snapshot.prevCoordinatorContext } : null;
+    carryW1Directives = [...snapshot.carryW1Directives];
+    carryW2Directives = [...snapshot.carryW2Directives];
+    carryCoordinatorRules = [...snapshot.carryCoordinatorRules];
+    carryNextActions = [...snapshot.carryNextActions];
+  }
+
+  function cloneRoundContext(context: Record<string, unknown> | undefined): Record<string, unknown> {
+    return context ? JSON.parse(JSON.stringify(context)) as Record<string, unknown> : {};
+  }
+
+  continuitySnapshots.set(1, snapshotContinuityState());
+  contextSnapshots.set(1, {});
 
   const executor = new GraphExecutor(graph, {
     onStateChange: (graphExecState) => {
@@ -2777,6 +2843,14 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
     },
     onRoundStart: async (round) => {
       await processQueuedControlRequests(round);
+      const pendingRewindRound = swarmStore.consumePendingRewindRound();
+      if (pendingRewindRound !== null) {
+        restoreContinuityState(pendingRewindRound);
+        return {
+          restartFromRound: pendingRewindRound,
+          context: cloneRoundContext(contextSnapshots.get(pendingRewindRound)),
+        };
+      }
       const fsStore = swarmStore.getState().features;
       lint = { round, passed: true, exitCode: 0, command: "disabled", ran: false };
       changedFiles = [];
@@ -2784,6 +2858,14 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
       deterministicVerification = { passed: true, issues: [] };
       roundTokenBaseline = tokenTracker.getAggregateTotals();
       await waitIfPaused(round, "round_start");
+      const resumedRewindRound = swarmStore.consumePendingRewindRound();
+      if (resumedRewindRound !== null) {
+        restoreContinuityState(resumedRewindRound);
+        return {
+          restartFromRound: resumedRewindRound,
+          context: cloneRoundContext(contextSnapshots.get(resumedRewindRound)),
+        };
+      }
       swarmStore.setCurrentRound(round);
       swarmStore.appendEvent({ type: "round.started", round, message: `Round ${round} started.` });
 
@@ -2792,7 +2874,7 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
       await writeFile(path.join(roundDir, MESSAGE_FILE), "", "utf8");
 
       if (fsStore.checkpointing) {
-        await createCheckpoint(round, opts.workspace);
+        await createCheckpoint(round, opts.workspace, currentRunId);
         swarmStore.appendEvent({ type: "checkpoint.created", round, message: `Checkpoint round ${round} created.` });
       }
     },
@@ -3055,6 +3137,8 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
       carryNextActions = mergeDirectiveLists(carryNextActions, parseStructuredSection(coordinator?.text || "", "NEXT_ACTIONS"), 12);
       const selectedVariant = isEnsembleTaskResult(coordinator) ? coordinator.selectedVariant : "single";
       prevCoordinatorContext = { round, status: finalStatus, variant: selectedVariant };
+      continuitySnapshots.set(round + 1, snapshotContinuityState());
+      contextSnapshots.set(round + 1, cloneRoundContext(context as Record<string, unknown>));
 
       const defects = parseDefectSeverities(worker2?.text || "");
       const shouldRewind = fsStore.checkpointing && round > 1 && (
@@ -3067,25 +3151,41 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
 
       if (shouldRewind) {
         const targetRound = round - 1;
-        const restored = await restoreCheckpoint(targetRound, opts.workspace);
+        const restored = await restoreCheckpoint(targetRound, opts.workspace, currentRunId);
+        swarmStore.rewindToRound(targetRound);
         swarmStore.appendEvent({
           type: "run.rewind",
-          round,
+          round: targetRound,
           level: "warn",
           message: `Auto-rewind to checkpoint round ${targetRound}.`,
-          metadata: { targetRound, restoredCount: restored },
+          metadata: { restoredFromRound: round, targetRound, restoredCount: restored },
         });
+        restoreContinuityState(targetRound);
         if (fsStore.humanInLoop) {
           swarmStore.setPaused(true, `Auto-paused after rewind to round ${targetRound}.`);
           await waitIfPaused(round, "post_rewind_review");
+          const resumedRewindRound = swarmStore.consumePendingRewindRound();
+          if (resumedRewindRound !== null) {
+            restoreContinuityState(resumedRewindRound);
+            return {
+              continue: true,
+              restartFromRound: resumedRewindRound,
+              context: cloneRoundContext(contextSnapshots.get(resumedRewindRound)),
+            };
+          }
         }
+        return {
+          continue: true,
+          restartFromRound: targetRound,
+          context: cloneRoundContext(contextSnapshots.get(targetRound)),
+        };
       }
 
       if (finalStatus === "PASS") {
         swarmStore.finishRun("Coordinator, evaluator, and auditor reached PASS.");
-        return false; // Exit loop
+        return { continue: false }; // Exit loop
       }
-      return true; // continue next round
+      return { continue: true }; // continue next round
     }
   });
 
@@ -3124,16 +3224,21 @@ export async function rewindSwarmToRound(round: number): Promise<{ round: number
   if (!state.workspace) {
     throw new Error("No workspace available for rewind.");
   }
+  if (!state.runId) {
+    throw new Error("No active run ID is available for rewind.");
+  }
   if (state.running && !state.paused) {
     throw new Error("Pause the run before rewinding.");
   }
-  const restoredCount = await restoreCheckpoint(round, state.workspace);
+  const restoredCount = await restoreCheckpoint(round, state.workspace, state.runId);
+  swarmStore.rewindToRound(round);
+  swarmStore.markPendingRewindRound(round);
   swarmStore.appendEvent({
     type: "run.rewind",
-    round: state.currentRound,
+    round,
     level: "warn",
     message: `Manual rewind to round ${round}.`,
-    metadata: { targetRound: round, restoredCount },
+    metadata: { restoredFromRound: state.currentRound, targetRound: round, restoredCount },
   });
   return { round, restoredCount };
 }
@@ -3243,6 +3348,14 @@ export async function requestSwarmControl(input: {
       ok: false,
       queued: false,
       message: "Checkpointing is disabled for this run.",
+      state,
+    };
+  }
+  if (state.running && state.paused && !isSafeRewindBoundary(state)) {
+    return {
+      ok: false,
+      queued: false,
+      message: "Rewind can only be applied while paused at a round boundary.",
       state,
     };
   }

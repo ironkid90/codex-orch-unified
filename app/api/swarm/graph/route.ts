@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { requireDashboardMutationAuth } from "@/app/api/_lib/require-dashboard-mutation-auth";
 import { graphStore } from "@/lib/swarm/graph-store";
 import { WorkflowGraphSchema } from "@/lib/swarm/graph-types";
 
@@ -44,6 +45,11 @@ export async function GET(request: NextRequest) {
  * Body: { graph: WorkflowGraph }
  */
 export async function POST(request: NextRequest) {
+  const authError = requireDashboardMutationAuth(request);
+  if (authError) {
+    return authError;
+  }
+
   try {
     const body = await request.json().catch(() => ({}));
     if (!body.graph) {
@@ -76,6 +82,11 @@ export async function POST(request: NextRequest) {
  * Remove a workflow graph (cannot delete the default graph).
  */
 export async function DELETE(request: NextRequest) {
+  const authError = requireDashboardMutationAuth(request);
+  if (authError) {
+    return authError;
+  }
+
   try {
     const graphId = request.nextUrl.searchParams.get("id");
     if (!graphId) {

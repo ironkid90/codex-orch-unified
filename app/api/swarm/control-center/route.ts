@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { requireDashboardMutationAuth } from "@/app/api/_lib/require-dashboard-mutation-auth";
 import { resolveDashboardWorkspace } from "@/lib/swarm/dashboard-workspaces";
 import { applyControlCenterUpdates, inspectControlCenter } from "@/lib/swarm/control-center";
 
@@ -43,6 +44,11 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const authError = requireDashboardMutationAuth(request);
+  if (authError) {
+    return authError;
+  }
+
   try {
     const workspaceRoot = await resolveDashboardWorkspace({
       requestedWorkspace: request.nextUrl.searchParams.get("workspace"),
