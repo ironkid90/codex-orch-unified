@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { FastForward, Pause, Play, Rewind } from "lucide-react";
 
 import { AntigravityPanel } from "@/app/components/AntigravityPanel";
+import { KanbanBoard } from "@/app/components/dashboard/kanban/KanbanBoard";
+import { PentestPanel } from "@/app/components/dashboard/pentest/PentestPanel";
+import { AgentConsole } from "@/app/components/dashboard/agents/AgentConsole";
+import { MemoryPanel as MemoryPanelNew } from "@/app/components/dashboard/memory/MemoryPanel";
 import { MemoryStatusWidget } from "@/app/components/MemoryStatusWidget";
 import { DashboardCommandBar } from "@/app/components/dashboard/shell/DashboardCommandBar";
 import { DashboardInspector } from "@/app/components/dashboard/shell/DashboardInspector";
@@ -90,6 +94,16 @@ function resolvePaneCopy(pane: DashboardPaneDescriptor["pane"]): { title: string
       return {
         title: "Realtime telemetry",
         description: "Keep the workbench open while the dock shows the live trace feed and diagnostics.",
+      };
+    case "kanban":
+      return {
+        title: "Kanban board",
+        description: "Manage tasks across columns with drag-and-drop. Create, assign, and track operations.",
+      };
+    case "pentest":
+      return {
+        title: "Pentest operations",
+        description: "Manage penetration testing agents, inject enclave tasks, and monitor callbacks.",
       };
     case "run":
     default:
@@ -386,6 +400,16 @@ export default function HomePage() {
         label: "Telemetry",
         hint: "Realtime activity, diagnostics, and dock controls.",
         badge: latestEvents.length > 0 ? String(latestEvents.length) : undefined,
+      },
+      {
+        pane: "kanban",
+        label: "Kanban",
+        hint: "Task board with drag-and-drop columns for managing operations.",
+      },
+      {
+        pane: "pentest",
+        label: "Pentest",
+        hint: "Penetration testing operations, agents, enclave tasks, and callbacks.",
       },
     ];
   }, [agents, controlCenter?.enabledServers.length, dashboard.viewModel.graph.nodes.length, isRunning, latestEvents.length, providerInventory.inventory.orderedProviders, state?.currentRound, state?.rounds.length, state?.runId]);
@@ -1064,7 +1088,11 @@ export default function HomePage() {
                 ? renderSettingsPane()
                 : layout.selectedPane === "telemetry"
                   ? renderTelemetryPane()
-                  : renderRunPane()}
+                  : layout.selectedPane === "kanban"
+                    ? <KanbanBoard />
+                    : layout.selectedPane === "pentest"
+                      ? <PentestPanel />
+                      : renderRunPane()}
     </>
   );
 

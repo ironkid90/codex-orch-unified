@@ -1,6 +1,6 @@
 import type { AgentId } from "@/lib/swarm/types";
 
-export type DashboardPane = "run" | "graph" | "agents" | "telemetry" | "history" | "memory" | "settings";
+export type DashboardPane = "run" | "graph" | "agents" | "telemetry" | "history" | "memory" | "settings" | "kanban" | "pentest";
 export type DashboardTelemetryTab = "messages" | "events" | "diagnostics" | "history";
 
 export interface PersistedDashboardLayoutState {
@@ -17,7 +17,7 @@ interface StorageLike {
   removeItem(key: string): void;
 }
 
-const VALID_PANES: DashboardPane[] = ["run", "graph", "agents", "telemetry", "history", "memory", "settings"];
+const VALID_PANES: DashboardPane[] = ["run", "graph", "agents", "telemetry", "history", "memory", "settings", "kanban", "pentest"];
 const VALID_TELEMETRY_TABS: DashboardTelemetryTab[] = ["messages", "events", "diagnostics", "history"];
 const VALID_AGENT_IDS: AgentId[] = ["planner", "research", "worker1", "worker2", "evaluator", "coordinator"];
 

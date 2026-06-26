@@ -2,6 +2,7 @@ import { CONTEXTSTREAM_TOOLS } from "./contextstream";
 import { EditFileTool } from "./edit-file";
 import { ExecuteShellTool } from "./execute-shell";
 import { HERMES_TOOLS } from "./hermes";
+import { lancedbSearchTool } from "./lancedb-search";
 import { qdrantSearchTool } from "./qdrant-search";
 import { ReadFileTool } from "./read-file";
 import { SearchFilesTool } from "./search-files";
@@ -14,7 +15,8 @@ const DEFAULT_TOOLS: Tool[] = [
   SearchFilesTool, 
   qdrantSearchTool as unknown as Tool,
   ...CONTEXTSTREAM_TOOLS,
-  ...HERMES_TOOLS
+  ...HERMES_TOOLS,
+  lancedbSearchTool as unknown as Tool
 ];
 
 export function getDefaultTools(): Tool[] {

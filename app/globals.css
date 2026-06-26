@@ -1558,3 +1558,99 @@ body {
     justify-content: flex-start;
   }
 }
+
+/* ─── Kanban Board Styles ─── */
+.kanban-column {
+  transition: background 0.2s ease;
+}
+.kanban-column:hover {
+  background: var(--glass-strong) !important;
+}
+.kanban-card {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.kanban-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.kanban-card:active {
+  transform: scale(0.98);
+}
+
+/* ─── Pentest Panel Styles ─── */
+.pentest-agent-card {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.pentest-agent-card:hover {
+  border-color: var(--accent-cyan) !important;
+  box-shadow: 0 0 12px var(--glow-cyan);
+}
+
+/* ─── Agent Console Styles ─── */
+.agent-card {
+  transition: all 0.3s ease;
+}
+.agent-card:hover {
+  border-color: var(--glass-border-hover) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+.agent-card--active {
+  animation: agent-pulse 2s ease-in-out infinite;
+}
+@keyframes agent-pulse {
+  0%, 100% { box-shadow: 0 0 8px var(--glow-cyan); }
+  50% { box-shadow: 0 0 20px var(--glow-cyan); }
+}
+
+/* ─── Memory Panel Styles ─── */
+.memory-stat-card {
+  transition: transform 0.2s ease;
+}
+.memory-stat-card:hover {
+  transform: scale(1.02);
+}
+
+/* ─── Glass card enhancements for new panels ─── */
+.glass-card--kanban,
+.glass-card--pentest,
+.glass-card--agents,
+.glass-card--memory {
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(12px);
+}
+
+/* ─── Drag and Drop Visual Feedback ─── */
+[draggable="true"] {
+  cursor: grab;
+}
+[draggable="true"]:active {
+  cursor: grabbing;
+  opacity: 0.7;
+}
+
+/* ─── Status Glow Indicators ─── */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.status-dot--active {
+  background: var(--accent-emerald);
+  box-shadow: 0 0 6px var(--accent-emerald);
+  animation: status-blink 2s ease-in-out infinite;
+}
+.status-dot--warning {
+  background: var(--accent-amber);
+  box-shadow: 0 0 6px var(--accent-amber);
+}
+.status-dot--error {
+  background: var(--accent-rose);
+  box-shadow: 0 0 6px var(--accent-rose);
+}
+@keyframes status-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
