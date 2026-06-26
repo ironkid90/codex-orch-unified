@@ -9,7 +9,7 @@
 		"omni": "python scripts/omni_cli.py",
 		"bootstrap": "node scripts/dev/bootstrap.mjs",
 		"doctor": "node scripts/dev/doctor.mjs",
-		"test": "tsx --test tests/**/*.test.ts",
+		"test": "tsx --test $(find tests -name '*.test.ts' | sort)",
 		"dev": "next dev --port 3017",
 		"dev:dashboard": "next dev --port 3017",
 		"dev:gui": "next dev --port 3017",
