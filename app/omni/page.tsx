@@ -2,14 +2,42 @@
 
 import { HybridThreadsPanel } from "@/app/components/dashboard/cockpit/HybridThreadsPanel";
 import { MilestoneBoard } from "@/app/components/dashboard/cockpit/MilestoneBoard";
-import { useState } from "react";
+import { useSwarmDashboardData } from "@/app/hooks/useSwarmDashboardData";
+import { useSwarmDashboardStream } from "@/app/hooks/useSwarmDashboardStream";
+import { buildWorkspaceScopedUrl, useWorkspaceSelection } from "@/app/hooks/useWorkspaceSelection";
+import { buildCodingCockpitViewModel } from "@/app/lib/dashboard/cockpit-view-model";
+import { deriveHomePageDashboardState } from "@/app/lib/dashboard/home-page-hook-state";
+import { useMemo, useState } from "react";
 import styles from "./omni.module.css";
 
 export default function OmniDashboard() {
   const [selectedPane, setSelectedPane] = useState("kanban");
   const [prompt, setPrompt] = useState("");
 
-  const dummyCockpit = {
+  const workspaceSelection = useWorkspaceSelection();
+  const dashboardData = useSwarmDashboardData({
+    selectedAgentId: null,
+    workspace: workspaceSelection.selectedWorkspace,
+  });
+  const dashboardStream = useSwarmDashboardStream({
+    url: buildWorkspaceScopedUrl("/api/swarm/stream", workspaceSelection.selectedWorkspace),
+  });
+
+  const dashboard = useMemo(
+    () =>
+      deriveHomePageDashboardState({
+        data: dashboardData,
+        stream: dashboardStream,
+        selectedAgentId: null,
+      }),
+    [dashboardData, dashboardStream],
+  );
+
+  const rawState = dashboard.state;
+  const realCockpit = useMemo(() => buildCodingCockpitViewModel(rawState), [rawState]);
+
+  // Fallback to dummy data if real data is empty so the UI doesn't look completely blank during development
+  const cockpit = realCockpit.directives.length > 0 ? realCockpit : {
     project: {
       name: "ShanLab Operation",
       workspace: "ShanLab",
@@ -77,13 +105,13 @@ export default function OmniDashboard() {
            {selectedPane === "kanban" && (
              <div>
                <h1 className={styles.paneTitle}>Hermes Task Kanban</h1>
-               <MilestoneBoard cockpit={dummyCockpit as any} />
+               <MilestoneBoard cockpit={cockpit as any} />
              </div>
            )}
            {selectedPane === "chat" && (
              <div className={styles.chatWrapper}>
                 <h1 className={styles.paneTitle}>Omni Workstreams</h1>
-                <HybridThreadsPanel cockpit={dummyCockpit as any} />
+                <HybridThreadsPanel cockpit={cockpit as any} />
                 <div className={styles.commandBox}>
                    <h3 className={styles.commandBoxTitle}>Command the Swarm</h3>
                    <div className={styles.commandBoxInner}>

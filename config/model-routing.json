@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-03-28T03:57:01.315Z",
+  "updatedAt": "2026-06-26T12:20:12.779Z",
   "source": "manual multi-provider prototype release",
   "probes": [
     {
@@ -67,38 +67,32 @@
     "planner": {
       "provider": "anthropic",
       "model": "claude-opus-4-6",
-      "score": 95,
-      "rationale": "Best for planning/reasoning tasks."
+      "rationale": "Throughput preset keeps planning on a stronger coordinator model."
     },
     "research": {
       "provider": "gemini",
       "model": "gemini-3.1-pro-preview",
-      "score": 92,
-      "rationale": "Large context window ideal for cross-file analysis."
+      "rationale": "Throughput preset keeps research on the broadest context candidate available."
     },
     "worker1": {
       "provider": "openai",
       "model": "gpt-5.4-mini",
-      "score": 96,
-      "rationale": "Default high-throughput coding worker. Prioritizes cheap parallel execution with strong enough completion quality."
+      "rationale": "Throughput preset favors lower-latency worker models."
     },
     "worker2": {
       "provider": "openai",
       "model": "gpt-5.4-mini",
-      "score": 95,
-      "rationale": "Second default worker also runs mini-first so the swarm can scale coding throughput without frontier-only cost."
+      "rationale": "Throughput preset favors lower-latency worker models."
     },
     "evaluator": {
       "provider": "anthropic",
       "model": "claude-opus-4-6",
-      "score": 96,
-      "rationale": "Deep analysis and evaluation capabilities."
+      "rationale": "Throughput preset reserves deeper review capacity for evaluation."
     },
     "coordinator": {
       "provider": "openai",
       "model": "gpt-5.4",
-      "score": 93,
-      "rationale": "Strong decision-making for coordination."
+      "rationale": "Throughput preset keeps coordination on a strong general model."
     }
   },
   "fallback": {

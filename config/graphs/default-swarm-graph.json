@@ -1,0 +1,125 @@
+{
+  "graph": {
+    "id": "default-swarm-graph",
+    "version": "1.0.0",
+    "name": "Default Swarm Workflow",
+    "description": "Core fan-out/fan-in topology: Planner -> Research -> (Worker-1, Worker-2) -> Evaluator -> Coordinator.",
+    "nodes": [
+      {
+        "id": "planner",
+        "type": "agent",
+        "label": "Planner",
+        "agentRole": "Planner",
+        "metadata": {
+          "topologyRole": "entry"
+        }
+      },
+      {
+        "id": "research",
+        "type": "agent",
+        "label": "Research",
+        "agentRole": "Research",
+        "metadata": {
+          "topologyRole": "context"
+        }
+      },
+      {
+        "id": "worker1",
+        "type": "agent",
+        "label": "Worker-1",
+        "agentRole": "Worker-1",
+        "metadata": {
+          "topologyRole": "fan-out-worker"
+        }
+      },
+      {
+        "id": "worker2",
+        "type": "agent",
+        "label": "Worker-2",
+        "agentRole": "Worker-2",
+        "metadata": {
+          "topologyRole": "fan-out-worker"
+        }
+      },
+      {
+        "id": "evaluator",
+        "type": "agent",
+        "label": "Evaluator",
+        "agentRole": "Evaluator",
+        "metadata": {
+          "topologyRole": "fan-in-review"
+        }
+      },
+      {
+        "id": "coordinator",
+        "type": "agent",
+        "label": "Coordinator",
+        "agentRole": "Coordinator",
+        "metadata": {
+          "topologyRole": "fan-in-decision"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "from": "planner",
+        "to": "research",
+        "label": "plan",
+        "type": "sequential"
+      },
+      {
+        "id": "e1",
+        "from": "research",
+        "to": "worker1",
+        "label": "fan-out implementation",
+        "type": "parallel"
+      },
+      {
+        "id": "e2",
+        "from": "research",
+        "to": "worker2",
+        "label": "fan-out audit",
+        "type": "parallel"
+      },
+      {
+        "id": "e3",
+        "from": "worker1",
+        "to": "evaluator",
+        "label": "implementation evidence",
+        "type": "sequential"
+      },
+      {
+        "id": "e4",
+        "from": "worker2",
+        "to": "evaluator",
+        "label": "audit evidence",
+        "type": "sequential"
+      },
+      {
+        "id": "e5",
+        "from": "evaluator",
+        "to": "coordinator",
+        "label": "fan-in decision",
+        "type": "sequential"
+      }
+    ],
+    "entryNodeId": "planner",
+    "exitNodeIds": [
+      "coordinator"
+    ],
+    "metadata": {
+      "topology": "fan-out/fan-in",
+      "roles": [
+        "Research",
+        "Worker-1",
+        "Worker-2",
+        "Evaluator",
+        "Coordinator"
+      ]
+    }
+  },
+  "createdAt": "2026-06-26T12:07:54.660Z",
+  "updatedAt": "2026-06-26T12:07:54.660Z",
+  "isDefault": true
+}
