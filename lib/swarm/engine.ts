@@ -2613,23 +2613,67 @@ export function assignNextActions(actions: string[]): ActionAssignments {
 
     // 2. If no explicit tag, use a smart scoring algorithm based on keyword patterns
     if (!matched) {
-      const scores = {
-        "browser-agent": browserPattern.test(action) ? 1 : 0,
-        "mcp-agent": mcpPattern.test(action) ? 1 : 0,
-        architect: architectPattern.test(action) ? 1 : 0,
-        "dev-team-ai": devTeamPattern.test(action) ? 1 : 0,
-        engineer: engineerPattern.test(action) ? 1 : 0,
-        "qa-tester": qaPattern.test(action) ? 1 : 0,
-        "test-runner": testRunnerPattern.test(action) ? 1 : 0,
+      const scoringRules: Array<{ agent: keyof ActionAssignments; pattern: RegExp; weight: number }> = [
+        // dev-team-ai
+        { agent: "dev-team-ai", pattern: /\b(scrum|sprint|agile|kanban|backlog|milestone)\b/i, weight: 3 },
+        { agent: "dev-team-ai", pattern: /\b(coordinator|manager|alignment|meeting|team|tickets?|issues?|status)\b/i, weight: 2 },
+        { agent: "dev-team-ai", pattern: /\b(todo|orchestrat|scrum[-\s]?master)\b/i, weight: 1 },
+        // architect
+        { agent: "architect", pattern: /\b(adr|mermaid|flowchart|uml|sequence[-\s]?diagram|class[-\s]?diagram)\b/i, weight: 3 },
+        { agent: "architect", pattern: /\b(architect(ure)?|layout|schema|concept|database[-\s]?design|system[-\s]?design)\b/i, weight: 2 },
+        { agent: "architect", pattern: /\b(design|structure|spec|plan|implementation[-\s]?plan)\b/i, weight: 1 },
+        // engineer
+        { agent: "engineer", pattern: /\b(refactor|algorithm|typescript|python|compile)\b/i, weight: 3 },
+        { agent: "engineer", pattern: /\b(code|develop|implement|backend|logic|class|method|helper|util|script)\b/i, weight: 2 },
+        { agent: "engineer", pattern: /\b(program|fix|bug|function|main|app)\b/i, weight: 1 },
+        // qa-tester
+        { agent: "qa-tester", pattern: /\b(vulnerability|leak|leakage|diagnostic|falsify)\b/i, weight: 3 },
+        { agent: "qa-tester", pattern: /\b(audit|safety|security|assurance|assertion|health)\b/i, weight: 2 },
+        { agent: "qa-tester", pattern: /\b(qa|tester?|verify|validate|repro|coverage|lint|check|expect)\b/i, weight: 1 },
+        // test-runner
+        { agent: "test-runner", pattern: /\b(vitest|jest|pytest|mocha|chai|unittest)\b/i, weight: 3 },
+        { agent: "test-runner", pattern: /\b(test[-\s]?runner|test[-\s]?suite|unit[-\s]?test|integration[-\s]?test|e2e|playwright[-\s]?test)\b/i, weight: 2 },
+        { agent: "test-runner", pattern: /\b(run[-\s]?test|npm[-\s]?run[-\s]?test)\b/i, weight: 1 },
+        // browser-agent
+        { agent: "browser-agent", pattern: /\b(puppeteer|playwright|selenium|cypress|screenshot)\b/i, weight: 3 },
+        { agent: "browser-agent", pattern: /\b(ui|frontend|scrap(e|ing)|react|next|component|chrome|visual)\b/i, weight: 2 },
+        { agent: "browser-agent", pattern: /\b(browser|html|css|view|page|web|style|dom|js|javascript)\b/i, weight: 1 },
+        // mcp-agent
+        { agent: "mcp-agent", pattern: /\b(mcp|bigquery|vertex|firestore|gke|cloudrun|pubsub|gsp|android|prisma)\b/i, weight: 3 },
+        { agent: "mcp-agent", pattern: /\b(integration|database|sql|postgres|mysql|sqlite|gcloud|google[-\s]?cloud)\b/i, weight: 2 },
+        { agent: "mcp-agent", pattern: /\b(tool|mcp[-\s]?server|api|sdk)\b/i, weight: 1 },
+      ];
+
+      const scores: Record<keyof ActionAssignments, number> = {
+        worker1: 0,
+        worker2: 0,
+        "dev-team-ai": 0,
+        architect: 0,
+        engineer: 0,
+        "qa-tester": 0,
+        "test-runner": 0,
+        "browser-agent": 0,
+        "mcp-agent": 0,
       };
+
+      for (const rule of scoringRules) {
+        const globalPattern = new RegExp(rule.pattern.source, rule.pattern.flags.includes("g") ? rule.pattern.flags : rule.pattern.flags + "g");
+        const matches = action.match(globalPattern);
+        if (matches) {
+          scores[rule.agent] += matches.length * rule.weight;
+        }
+      }
 
       // Find the highest score
       let highestScore = 0;
-      let bestAgent: keyof typeof scores | null = null;
+      let bestAgent: keyof ActionAssignments | null = null;
       for (const [agent, score] of Object.entries(scores)) {
+        if (agent === "worker1" || agent === "worker2") {
+          continue;
+        }
         if (score > highestScore) {
           highestScore = score;
-          bestAgent = agent as keyof typeof scores;
+          bestAgent = agent as keyof ActionAssignments;
         }
       }
 
