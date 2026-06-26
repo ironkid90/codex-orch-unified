@@ -1,9 +1,30 @@
 /**
  * Provider abstraction layer - inspired by Roo-Code's multi-provider architecture
  * Supports OpenAI, Anthropic, Gemini, Ollama, and any OpenAI-compatible API
+ * Extended with custom provider support and flexible auth modes.
  */
 
-export type ProviderType = "openai" | "anthropic" | "gemini" | "ollama" | "openai-compatible" | "azure-openai" | "antigravity";
+export type ProviderType =
+  | "openai"
+  | "anthropic"
+  | "gemini"
+  | "ollama"
+  | "openai-compatible"
+  | "azure-openai"
+  | "antigravity"
+  | "custom";
+
+/** Auth mode for provider connections */
+export type ProviderAuthMode =
+  | "api_key"
+  | "bearer_token"
+  | "oauth_token"
+  | "chatgpt_oauth"
+  | "codex_oauth"
+  | "adc"
+  | "vertex"
+  | "none"
+  | "auto";
 
 export interface ModelInfo {
   id: string;
@@ -28,6 +49,18 @@ export interface ProviderConfig {
   systemPrompt?: string;
   timeout?: number;
   headers?: Record<string, string>;
+  /** Auth mode hint for resolving credentials */
+  authMode?: ProviderAuthMode;
+  /** Human-readable name for custom providers */
+  displayName?: string;
+  /** Whether this provider was added by the user (not built-in) */
+  isCustom?: boolean;
+  /** OAuth-specific fields */
+  oauthClientId?: string;
+  oauthClientSecret?: string;
+  oauthScopes?: string[];
+  oauthTokenUrl?: string;
+  oauthAuthUrl?: string;
 }
 
 export interface Message {

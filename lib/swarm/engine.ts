@@ -1601,7 +1601,7 @@ function resolveGeminiCompatibleBaseUrl(): string | undefined {
   return undefined;
 }
 
-function buildUnifiedProviderConfig(task: AgentTask, provider: Exclude<ProviderId, "codex">): UnifiedProviderConfig {
+function buildUnifiedProviderConfig(task: AgentTask, provider: Exclude<ProviderId, "codex" | "gemini">): UnifiedProviderConfig {
   const modelOverride = task.execution?.model;
   const maxTokens = parseClampedInt(
     process.env.SWARM_PROVIDER_MAX_OUTPUT_TOKENS,
@@ -1638,6 +1638,41 @@ function buildUnifiedProviderConfig(task: AgentTask, provider: Exclude<ProviderI
       model: modelOverride || process.env.ANTHROPIC_MODEL || "claude-opus-4-6",
       apiKey: process.env.ANTHROPIC_API_KEY,
       baseUrl: process.env.ANTHROPIC_BASE_URL,
+      maxTokens,
+      temperature: 0.2,
+    };
+  }
+
+  if (provider === "antigravity") {
+    return {
+      type: "antigravity",
+      model: modelOverride || process.env.ANTIGRAVITY_MODEL || "claude-sonnet-4-5",
+      apiKey: process.env.ANTIGRAVITY_API_KEY || "apifun",
+      baseUrl: process.env.ANTIGRAVITY_BASE_URL || "http://127.0.0.1:8787/v1",
+      maxTokens,
+      temperature: 0.2,
+    };
+  }
+
+  if (provider === "openai-compatible" || provider === "azure-openai") {
+    return {
+      type: provider,
+      model: modelOverride || task.execution?.model || process.env.OPENAI_MODEL || "gpt-4o",
+      apiKey: task.execution?.apiKey || process.env.OPENAI_API_KEY,
+      baseUrl: task.execution?.baseUrl || process.env.OPENAI_BASE_URL || resolveOpenAIBaseUrl(process.env.OPENAI_BASE_URL),
+      headers: task.execution?.headers,
+      maxTokens,
+      temperature: 0.2,
+    };
+  }
+
+  if (provider === "custom") {
+    return {
+      type: "openai-compatible",
+      model: modelOverride || task.execution?.model || "gpt-4o",
+      apiKey: task.execution?.apiKey,
+      baseUrl: task.execution?.baseUrl,
+      headers: task.execution?.headers,
       maxTokens,
       temperature: 0.2,
     };
@@ -1699,7 +1734,7 @@ function createToolContext(task: AgentTask): AgentToolContext {
 
 async function runUnifiedProviderTask(
   task: AgentTask,
-  providerId: Exclude<ProviderId, "codex">,
+  providerId: Exclude<ProviderId, "codex" | "gemini">,
 ): Promise<TokenUsage> {
   const provider = createProvider(buildUnifiedProviderConfig(task, providerId));
   const enableTools = process.env.SWARM_ENABLE_TOOLS !== "0";
@@ -1809,10 +1844,20 @@ async function runProviderTask(task: AgentTask): Promise<TokenUsage> {
     return runGeminiTask(task);
   }
 
-  if (provider === "openai" || provider === "anthropic" || provider === "ollama") {
-    return runUnifiedProviderTask(task, provider);
+  // All other providers route through the unified tool-aware loop
+  if (
+    provider === "openai" ||
+    provider === "anthropic" ||
+    provider === "ollama" ||
+    provider === "antigravity" ||
+    provider === "openai-compatible" ||
+    provider === "azure-openai" ||
+    provider === "custom"
+  ) {
+    return runUnifiedProviderTask(task, provider as Exclude<ProviderId, "codex" | "gemini">);
   }
 
+  // Default fallback to codex
   return runCodexTask(task);
 }
 

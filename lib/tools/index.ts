@@ -6,17 +6,21 @@ import { lancedbSearchTool } from "./lancedb-search";
 import { qdrantSearchTool } from "./qdrant-search";
 import { ReadFileTool } from "./read-file";
 import { SearchFilesTool } from "./search-files";
+import { WEB_TOOLS } from "./web-search";
+import { PROVIDER_TOOLS } from "./provider-dispatch";
 import type { Tool, ToolContext, ToolRegistry, ToolResult } from "./types";
 
 const DEFAULT_TOOLS: Tool[] = [
-  ReadFileTool, 
-  EditFileTool, 
-  ExecuteShellTool, 
-  SearchFilesTool, 
+  ReadFileTool,
+  EditFileTool,
+  ExecuteShellTool,
+  SearchFilesTool,
   qdrantSearchTool as unknown as Tool,
   ...CONTEXTSTREAM_TOOLS,
   ...HERMES_TOOLS,
-  lancedbSearchTool as unknown as Tool
+  lancedbSearchTool as unknown as Tool,
+  ...WEB_TOOLS,
+  ...PROVIDER_TOOLS,
 ];
 
 export function getDefaultTools(): Tool[] {
@@ -57,5 +61,6 @@ export * from "./execute-shell";
 export * from "./qdrant-search";
 export * from "./read-file";
 export * from "./search-files";
+export * from "./web-search";
+export * from "./provider-dispatch";
 export * from "./types";
-

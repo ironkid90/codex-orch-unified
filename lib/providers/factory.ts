@@ -4,6 +4,7 @@ import path from "node:path";
 /**
  * Provider Factory - creates and caches provider instances
  * Automatically selects provider based on environment variables
+ * Extended with custom provider support from auth-manager.
  */
 
 import type { Provider, ProviderConfig, ProviderType } from "./types";
@@ -58,7 +59,12 @@ export function createProvider(config: ProviderConfig): Provider {
     case "openai":
     case "openai-compatible":
     case "azure-openai":
-      return new OpenAIProvider(config);
+    case "custom":
+      // All OpenAI-compatible types use the OpenAI provider
+      return new OpenAIProvider({
+        ...config,
+        type: config.type === "custom" ? "openai-compatible" : config.type,
+      });
     case "anthropic":
       return new AnthropicProvider(config);
     case "ollama":
@@ -167,7 +173,7 @@ export function createProviderFromEnv(overrides?: Partial<ProviderConfig>): Prov
   const merged = { ...detected, ...overrides };
   
   // Fill in default fallback settings if missing
-  if (merged.type === "openai" && !merged.apiKey && !(merged as any).bearerToken) {
+  if (merged.type === "openai" && !merged.apiKey && !(merged as ProviderConfig & { bearerToken?: string }).bearerToken) {
     merged.apiKey = "apifun";
     merged.baseUrl = merged.baseUrl ?? "http://127.0.0.1:8787/v1";
   }
@@ -180,19 +186,28 @@ export function createProviderFromEnv(overrides?: Partial<ProviderConfig>): Prov
 }
 
 /**
+ * Create a provider from a custom config object (e.g., from auth-manager custom providers)
+ */
+export function createCustomProvider(config: ProviderConfig): Provider {
+  return createProvider(config);
+}
+
+/**
  * Get all available providers from environment
  */
-export function getAvailableProviders(): Array<{ type: ProviderType; model: string; available: boolean }> {
+export function getAvailableProviders(): Array<{ type: ProviderType; model: string; available: boolean; displayName?: string }> {
   return [
     {
       type: "anthropic",
       model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5",
       available: true, // Fallback to local Hermes is always available
+      displayName: "Anthropic / Claude",
     },
     {
       type: "openai",
       model: process.env.OPENAI_MODEL ?? process.env.OPENAI_SWARM_MODEL ?? "gpt-4o",
       available: true, // Fallback to local Hermes is always available
+      displayName: "OpenAI / ChatGPT",
     },
     {
       type: "gemini",
@@ -204,16 +219,19 @@ export function getAvailableProviders(): Array<{ type: ProviderType; model: stri
         process.env.GOOGLE_USE_VERTEXAI === "1" ||
         process.env.GOOGLE_GENAI_USE_VERTEXAI === "1"
       ),
+      displayName: "Google / Gemini",
     },
     {
       type: "ollama",
       model: process.env.OLLAMA_MODEL ?? "llama3.2",
       available: true, // Always try, may fail at runtime
+      displayName: "Ollama (Local)",
     },
     {
       type: "antigravity",
       model: process.env.ANTIGRAVITY_MODEL ?? "claude-sonnet-4-5",
       available: true,
+      displayName: "Antigravity Proxy",
     },
   ];
 }

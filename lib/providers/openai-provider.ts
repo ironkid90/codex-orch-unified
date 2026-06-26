@@ -93,10 +93,28 @@ export class OpenAIProvider implements Provider {
   }
 
   private async getConnection(): Promise<{ baseUrl: string; headers: Record<string, string> }> {
+    // For custom providers with explicit bearer/oauth auth mode, build headers directly
+    if (this.config.isCustom && this.config.authMode && this.config.authMode !== "api_key" && this.config.authMode !== "auto") {
+      const baseUrl = this.config.baseUrl || "https://api.openai.com/v1";
+      const customHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...(this.config.headers || {}),
+      };
+      if ((this.config.authMode === "bearer_token" || this.config.authMode === "oauth_token") && this.config.apiKey) {
+        customHeaders["Authorization"] = `Bearer ${this.config.apiKey}`;
+      } else if (this.config.authMode === "none") {
+        // No auth header
+      } else if (this.config.apiKey) {
+        customHeaders["Authorization"] = `Bearer ${this.config.apiKey}`;
+      }
+      return { baseUrl, headers: customHeaders };
+    }
+
     const resolved = await resolveOpenAIAuth({
       apiKey: this.config.apiKey,
       baseUrl: this.config.baseUrl,
       headers: this.config.headers,
+      authMode: this.config.authMode,
     });
     return {
       baseUrl: resolved.baseUrl,

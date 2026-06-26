@@ -993,8 +993,10 @@ export default function HomePage() {
         inventory={providerInventory.inventory}
         status={providerInventory.status}
         error={providerInventory.error}
+        workspace={workspaceSelection.selectedWorkspace}
         onSaveToken={providerInventory.saveToken}
         onRefresh={providerInventory.refreshProvider}
+        onProviderAdded={() => void providerInventory.refresh()}
       />
       <div className="content-grid equal">
         <section className="glass-card">

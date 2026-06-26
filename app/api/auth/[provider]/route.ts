@@ -15,7 +15,12 @@ const VALID_PROVIDERS = new Set<string>([
   "antigravity",
   "openai-compatible",
   "azure-openai",
+  "custom",
 ]);
+
+function isCustomProvider(provider: string): boolean {
+  return provider.startsWith("custom::") || provider === "custom";
+}
 
 function isValidProvider(provider: string): provider is ProviderType {
   return VALID_PROVIDERS.has(provider);
@@ -97,6 +102,33 @@ export async function POST(
     if (body.action === "refresh") {
       const status = await providerAuthManager.refreshProvider(provider, { workspaceRoot });
       return NextResponse.json({ ok: true, provider, status });
+    }
+
+    // Store an API key directly (no OAuth flow needed)
+    if (body.action === "store_api_key" || body.apiKey) {
+      const keyToStore = body.apiKey || body.token;
+      if (!keyToStore) {
+        return NextResponse.json(
+          { error: "Missing 'apiKey' in request body." },
+          { status: 400 },
+        );
+      }
+      const entry = await providerAuthManager.storeApiKey(
+        provider,
+        keyToStore,
+        body.metadata,
+        { workspaceRoot },
+      );
+      if (body.writeToEnv === true) {
+        await providerAuthManager.writeTokenToEnv(provider, keyToStore, { workspaceRoot });
+      }
+      return NextResponse.json({
+        ok: true,
+        provider,
+        status: entry,
+        persistedToEnv: body.writeToEnv === true,
+        message: `API key stored for ${provider}.${body.writeToEnv ? " Written to .env.local." : ""}`,
+      });
     }
 
     if (!body.token) {

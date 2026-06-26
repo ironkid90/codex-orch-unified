@@ -115,13 +115,29 @@ export class AnthropicProvider implements Provider {
   }
 
   private get headers(): Record<string, string> {
-    return {
+    const base: Record<string, string> = {
       "Content-Type": "application/json",
-      "x-api-key": this.config.apiKey ?? process.env.ANTHROPIC_API_KEY ?? "",
       "anthropic-version": "2023-06-01",
       "anthropic-beta": "prompt-caching-2024-07-31",
-      ...this.config.headers,
+      ...(this.config.headers || {}),
     };
+
+    // Custom providers may use bearer/OAuth instead of x-api-key
+    if (this.config.isCustom && this.config.authMode) {
+      if (this.config.authMode === "bearer_token" || this.config.authMode === "oauth_token") {
+        if (this.config.apiKey) {
+          base["Authorization"] = `Bearer ${this.config.apiKey}`;
+        }
+        return base;
+      }
+      if (this.config.authMode === "none") {
+        return base;
+      }
+    }
+
+    // Default: x-api-key for Anthropic native API
+    base["x-api-key"] = this.config.apiKey ?? process.env.ANTHROPIC_API_KEY ?? "";
+    return base;
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {

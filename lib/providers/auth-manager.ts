@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
-import type { ProviderType } from "./types";
+import type { ProviderConfig, ProviderType } from "./types";
 import { resolveOpenAIAuth, resolveGeminiAuth } from "./auth";
 
 const PROJECT_ROOT = process.cwd();
@@ -12,7 +12,7 @@ export interface ProviderAuthScopeOptions {
 }
 
 export interface ProviderTokenEntry {
-  provider: ProviderType;
+  provider: string;
   token?: string;
   apiKey?: string;
   refreshToken?: string;
@@ -30,12 +30,40 @@ export interface ProviderTokenEntry {
     useVertexAi?: boolean;
     vertexProject?: string;
     vertexLocation?: string;
+    displayName?: string;
+    isCustom?: boolean;
+    headers?: Record<string, string>;
+    oauthClientId?: string;
+    oauthAuthUrl?: string;
+    oauthTokenUrl?: string;
+    oauthScopes?: string[];
+    model?: string;
   };
+}
+
+export interface CustomProviderConfig {
+  id: string;
+  displayName: string;
+  type: ProviderType;
+  baseUrl: string;
+  apiKey?: string;
+  model: string;
+  headers?: Record<string, string>;
+  authMode?: string;
+  oauthClientId?: string;
+  oauthClientSecret?: string;
+  oauthAuthUrl?: string;
+  oauthTokenUrl?: string;
+  oauthScopes?: string[];
+  createdAt: string;
+  updatedAt: string;
+  status: "active" | "unconfigured" | "error";
 }
 
 export interface AuthStateSnapshot {
   savedAt: string;
   providers: Record<string, ProviderTokenEntry>;
+  customProviders?: Record<string, CustomProviderConfig>;
 }
 
 function resolveScopeRoot(projectRoot: string, workspaceRoot?: string | null): string {
@@ -83,13 +111,17 @@ async function loadAuthState(scopeRoot: string): Promise<AuthStateSnapshot> {
   ensureAuthDir(scopeRoot);
   const authStateFile = getAuthStateFile(scopeRoot);
   if (!existsSync(authStateFile)) {
-    return { savedAt: new Date().toISOString(), providers: {} };
+    return { savedAt: new Date().toISOString(), providers: {}, customProviders: {} };
   }
   try {
     const raw = await readFile(authStateFile, "utf8");
-    return JSON.parse(raw) as AuthStateSnapshot;
+    const parsed = JSON.parse(raw) as AuthStateSnapshot;
+    if (!parsed.customProviders) {
+      parsed.customProviders = {};
+    }
+    return parsed;
   } catch {
-    return { savedAt: new Date().toISOString(), providers: {} };
+    return { savedAt: new Date().toISOString(), providers: {}, customProviders: {} };
   }
 }
 
@@ -102,13 +134,14 @@ async function saveAuthState(scopeRoot: string, state: AuthStateSnapshot): Promi
 export class ProviderAuthManager {
   private readonly projectRoot: string;
   private cache = new Map<string, ProviderTokenEntry>();
+  private customProviderCache = new Map<string, CustomProviderConfig>();
   private refreshTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(options: { projectRoot?: string } = {}) {
     this.projectRoot = path.resolve(options.projectRoot || PROJECT_ROOT);
   }
 
-  private buildScopeCacheKey(provider: ProviderType, options?: ProviderAuthScopeOptions): string {
+  private buildScopeCacheKey(provider: string, options?: ProviderAuthScopeOptions): string {
     return `${resolveScopeRoot(this.projectRoot, options?.workspaceRoot)}::${provider}`;
   }
 
@@ -118,13 +151,18 @@ export class ProviderAuthManager {
     for (const [provider, entry] of Object.entries(state.providers)) {
       this.cache.set(`${scopeRoot}::${provider}`, entry);
     }
+    if (state.customProviders) {
+      for (const [id, config] of Object.entries(state.customProviders)) {
+        this.customProviderCache.set(`${scopeRoot}::custom::${id}`, config);
+      }
+    }
   }
 
   async initialize(): Promise<void> {
     await this.hydrateScopeCache();
   }
 
-  async getProviderStatus(provider: ProviderType, options?: ProviderAuthScopeOptions): Promise<ProviderTokenEntry> {
+  async getProviderStatus(provider: string, options?: ProviderAuthScopeOptions): Promise<ProviderTokenEntry> {
     await this.hydrateScopeCache(options);
     const cacheKey = this.buildScopeCacheKey(provider, options);
     const cached = this.cache.get(cacheKey);
@@ -135,15 +173,38 @@ export class ProviderAuthManager {
   }
 
   async getAllProviderStatuses(options?: ProviderAuthScopeOptions): Promise<Record<string, ProviderTokenEntry>> {
-    const providers: ProviderType[] = ["openai", "anthropic", "gemini", "ollama", "antigravity"];
+    const builtinProviders: ProviderType[] = ["openai", "anthropic", "gemini", "ollama", "antigravity"];
     const result: Record<string, ProviderTokenEntry> = {};
-    for (const provider of providers) {
+    for (const provider of builtinProviders) {
       result[provider] = await this.getProviderStatus(provider, options);
+    }
+    // Include custom providers
+    const customProviders = await this.getCustomProviders(options);
+    for (const [id, config] of Object.entries(customProviders)) {
+      result[`custom::${id}`] = {
+        provider: `custom::${id}`,
+        apiKey: config.apiKey ? `${config.apiKey.slice(0, 8)}...` : undefined,
+        source: config.baseUrl,
+        updatedAt: config.updatedAt,
+        status: config.status,
+        metadata: {
+          displayName: config.displayName,
+          isCustom: true,
+          baseUrl: config.baseUrl,
+          model: config.model,
+          headers: config.headers,
+          mode: config.authMode,
+          oauthClientId: config.oauthClientId,
+          oauthAuthUrl: config.oauthAuthUrl,
+          oauthTokenUrl: config.oauthTokenUrl,
+          oauthScopes: config.oauthScopes,
+        },
+      };
     }
     return result;
   }
 
-  async refreshProvider(provider: ProviderType, options?: ProviderAuthScopeOptions): Promise<ProviderTokenEntry> {
+  async refreshProvider(provider: string, options?: ProviderAuthScopeOptions): Promise<ProviderTokenEntry> {
     const now = new Date().toISOString();
     const scopeRoot = resolveScopeRoot(this.projectRoot, options?.workspaceRoot);
     const scopeEnv = await loadScopedEnv(scopeRoot);
@@ -221,7 +282,7 @@ export class ProviderAuthManager {
             updatedAt: now,
             status: "active",
             metadata: {
-              availableModes: ["api_key"],
+              availableModes: ["api_key", "bearer_token", "oauth_token"],
               baseUrl: envValue("ANTHROPIC_BASE_URL") || "http://127.0.0.1:9119",
             },
           };
@@ -282,7 +343,7 @@ export class ProviderAuthManager {
   }
 
   async storeOAuthToken(
-    provider: ProviderType,
+    provider: string,
     token: string,
     refreshToken?: string,
     expiresInSeconds?: number,
@@ -305,7 +366,6 @@ export class ProviderAuthManager {
     await this.persistState(options);
 
     if (expiresInSeconds && expiresInSeconds > 60) {
-      // Write full token to env so the scheduled refresh can re-resolve it
       await this.writeTokenToEnv(provider, token, options).catch(() => { /* best-effort */ });
       this.scheduleRefresh(provider, (expiresInSeconds - 60) * 1000, options);
     }
@@ -313,7 +373,93 @@ export class ProviderAuthManager {
     return entry;
   }
 
-  async writeTokenToEnv(provider: ProviderType, token: string, options?: ProviderAuthScopeOptions): Promise<void> {
+  async storeApiKey(
+    provider: string,
+    apiKey: string,
+    metadata?: ProviderTokenEntry["metadata"],
+    options?: ProviderAuthScopeOptions,
+  ): Promise<ProviderTokenEntry> {
+    const now = new Date().toISOString();
+    const entry: ProviderTokenEntry = {
+      provider,
+      apiKey: `${apiKey.slice(0, 8)}...`,
+      source: "dashboard_input",
+      updatedAt: now,
+      status: "active",
+      metadata,
+    };
+    this.cache.set(this.buildScopeCacheKey(provider, options), entry);
+    await this.persistState(options);
+    return entry;
+  }
+
+  /** Register or update a custom provider configuration */
+  async saveCustomProvider(
+    config: Omit<CustomProviderConfig, "createdAt" | "updatedAt"> & { createdAt?: string },
+    options?: ProviderAuthScopeOptions,
+  ): Promise<CustomProviderConfig> {
+    const scopeRoot = resolveScopeRoot(this.projectRoot, options?.workspaceRoot);
+    const now = new Date().toISOString();
+    const existing = this.customProviderCache.get(`${scopeRoot}::custom::${config.id}`);
+    const full: CustomProviderConfig = {
+      ...config,
+      createdAt: existing?.createdAt || config.createdAt || now,
+      updatedAt: now,
+      status: config.apiKey || config.authMode === "none" ? "active" : "unconfigured",
+    };
+    this.customProviderCache.set(`${scopeRoot}::custom::${config.id}`, full);
+    await this.persistState(options);
+    return full;
+  }
+
+  /** Delete a custom provider by ID */
+  async deleteCustomProvider(id: string, options?: ProviderAuthScopeOptions): Promise<void> {
+    const scopeRoot = resolveScopeRoot(this.projectRoot, options?.workspaceRoot);
+    this.customProviderCache.delete(`${scopeRoot}::custom::${id}`);
+    await this.persistState(options);
+  }
+
+  /** Get all custom providers for a scope */
+  async getCustomProviders(options?: ProviderAuthScopeOptions): Promise<Record<string, CustomProviderConfig>> {
+    await this.hydrateScopeCache(options);
+    const scopeRoot = resolveScopeRoot(this.projectRoot, options?.workspaceRoot);
+    const prefix = `${scopeRoot}::custom::`;
+    const result: Record<string, CustomProviderConfig> = {};
+    for (const [key, config] of this.customProviderCache.entries()) {
+      if (key.startsWith(prefix)) {
+        const id = key.slice(prefix.length);
+        result[id] = config;
+      }
+    }
+    return result;
+  }
+
+  /** Build a ProviderConfig from a custom provider entry (for use in the engine) */
+  async buildCustomProviderConfig(
+    id: string,
+    modelOverride?: string,
+    options?: ProviderAuthScopeOptions,
+  ): Promise<ProviderConfig | null> {
+    const customProviders = await this.getCustomProviders(options);
+    const config = customProviders[id];
+    if (!config) return null;
+    return {
+      type: config.type,
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+      model: modelOverride || config.model,
+      headers: config.headers,
+      authMode: config.authMode as ProviderConfig["authMode"],
+      displayName: config.displayName,
+      isCustom: true,
+      oauthClientId: config.oauthClientId,
+      oauthAuthUrl: config.oauthAuthUrl,
+      oauthTokenUrl: config.oauthTokenUrl,
+      oauthScopes: config.oauthScopes,
+    };
+  }
+
+  async writeTokenToEnv(provider: string, token: string, options?: ProviderAuthScopeOptions): Promise<void> {
     const scopeRoot = resolveScopeRoot(this.projectRoot, options?.workspaceRoot);
     const envPath = path.join(scopeRoot, ".env.local");
     let content = "";
@@ -343,7 +489,6 @@ export class ProviderAuthManager {
     }
 
     await writeFile(envPath, content, "utf8");
-
     process.env[envKey] = sanitized;
   }
 
@@ -352,7 +497,7 @@ export class ProviderAuthManager {
     return new Date(entry.expiresAt).getTime() < Date.now();
   }
 
-  private scheduleRefresh(provider: ProviderType, delayMs: number, options?: ProviderAuthScopeOptions): void {
+  private scheduleRefresh(provider: string, delayMs: number, options?: ProviderAuthScopeOptions): void {
     const refreshKey = this.buildScopeCacheKey(provider, options);
     const existing = this.refreshTimers.get(refreshKey);
     if (existing) clearTimeout(existing);
@@ -369,13 +514,24 @@ export class ProviderAuthManager {
   private async persistState(options?: ProviderAuthScopeOptions): Promise<void> {
     const scopeRoot = resolveScopeRoot(this.projectRoot, options?.workspaceRoot);
     const scopePrefix = `${scopeRoot}::`;
+    const customPrefix = `${scopeRoot}::custom::`;
+
+    const providers = Object.fromEntries(
+      Array.from(this.cache.entries())
+        .filter(([key]) => key.startsWith(scopePrefix) && !key.includes("::custom::"))
+        .map(([key, entry]) => [key.slice(scopePrefix.length), entry]),
+    );
+
+    const customProviders = Object.fromEntries(
+      Array.from(this.customProviderCache.entries())
+        .filter(([key]) => key.startsWith(customPrefix))
+        .map(([key, config]) => [key.slice(customPrefix.length), config]),
+    );
+
     const state: AuthStateSnapshot = {
       savedAt: new Date().toISOString(),
-      providers: Object.fromEntries(
-        Array.from(this.cache.entries())
-          .filter(([key]) => key.startsWith(scopePrefix))
-          .map(([key, entry]) => [key.slice(scopePrefix.length), entry]),
-      ),
+      providers,
+      customProviders,
     };
     await saveAuthState(scopeRoot, state);
   }
