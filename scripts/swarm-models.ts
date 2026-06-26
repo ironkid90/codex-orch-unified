@@ -409,6 +409,13 @@ const roleWeights: Record<AgentId, CapabilityVector> = {
   worker2: { coding: 0.28, reasoning: 0.42, context: 0.18, speed: 0.04, cost: 0.08 },
   evaluator: { coding: 0.21, reasoning: 0.45, context: 0.2, speed: 0.06, cost: 0.08 },
   coordinator: { coding: 0.16, reasoning: 0.4, context: 0.24, speed: 0.1, cost: 0.1 },
+  "dev-team-ai": { coding: 0.15, reasoning: 0.35, context: 0.25, speed: 0.15, cost: 0.1 },
+  architect: { coding: 0.2, reasoning: 0.4, context: 0.2, speed: 0.1, cost: 0.1 },
+  engineer: { coding: 0.45, reasoning: 0.25, context: 0.14, speed: 0.1, cost: 0.06 },
+  "qa-tester": { coding: 0.28, reasoning: 0.42, context: 0.18, speed: 0.04, cost: 0.08 },
+  "test-runner": { coding: 0.2, reasoning: 0.2, context: 0.1, speed: 0.4, cost: 0.1 },
+  "browser-agent": { coding: 0.3, reasoning: 0.3, context: 0.2, speed: 0.1, cost: 0.1 },
+  "mcp-agent": { coding: 0.3, reasoning: 0.3, context: 0.2, speed: 0.1, cost: 0.1 },
 };
 
 const providerRoleBias: Record<AgentId, Partial<Record<ProviderId, number>>> = {
@@ -418,6 +425,13 @@ const providerRoleBias: Record<AgentId, Partial<Record<ProviderId, number>>> = {
   worker2: { openai: 9, codex: 8, gemini: 7, anthropic: 9 },
   evaluator: { openai: 9, gemini: 8, codex: 7, anthropic: 10 },
   coordinator: { openai: 10, gemini: 8, codex: 7, anthropic: 7 },
+  "dev-team-ai": { openai: 10, gemini: 8, codex: 7, anthropic: 7 },
+  architect: { openai: 10, gemini: 8, codex: 7, anthropic: 7 },
+  engineer: { codex: 10, openai: 8, gemini: 6, anthropic: 7 },
+  "qa-tester": { openai: 9, codex: 8, gemini: 7, anthropic: 9 },
+  "test-runner": { openai: 9, codex: 8, gemini: 7, anthropic: 9 },
+  "browser-agent": { codex: 10, openai: 8, gemini: 6, anthropic: 7 },
+  "mcp-agent": { codex: 10, openai: 8, gemini: 6, anthropic: 7 },
 };
 
 function scoreCandidateForRole(role: AgentId, candidate: ModelCandidate, probe: ProbeResult): number {

@@ -2534,28 +2534,133 @@ function buildAdaptiveGuidance(context: CoordinatorContinuityContext | null): st
   return "Previous round PASSED. Stay balanced but never bypass Rule #3 approval gate.";
 }
 
-function assignNextActions(actions: string[]): { worker1: string[]; worker2: string[] } {
-  const worker1: string[] = [];
-  const worker2: string[] = [];
+export interface ActionAssignments {
+  worker1: string[];
+  worker2: string[];
+  "dev-team-ai": string[];
+  architect: string[];
+  engineer: string[];
+  "qa-tester": string[];
+  "test-runner": string[];
+  "browser-agent": string[];
+  "mcp-agent": string[];
+}
+
+export function assignNextActions(actions: string[]): ActionAssignments {
+  const assignments: ActionAssignments = {
+    worker1: [],
+    worker2: [],
+    "dev-team-ai": [],
+    architect: [],
+    engineer: [],
+    "qa-tester": [],
+    "test-runner": [],
+    "browser-agent": [],
+    "mcp-agent": [],
+  };
+
+  const browserPattern = /\b(browser|ui|frontend|scrap(e|ing)|puppeteer|playwright|selenium|cypress|html|css|view|page|web|react|next|component|style|dom|js|javascript|chrome|screenshot|visual)\b/i;
+  const mcpPattern = /\b(mcp|tool|integration|bigquery|vertex|firestore|gke|cloudrun|pubsub|gsp|android|mcp[-\s]?server|api|sdk|gcloud|database|sql|postgres|mysql|sqlite|prisma)\b/i;
+  const architectPattern = /\b(architect(ure)?|design|adr|system[-s]?design|db[-\s]?design|structure|layout|uml|flowchart|spec|sequence[-\s]?diagram|mermaid|class[-\s]?diagram|schema|concept|plan|implementation[-\s]?plan)\b/i;
+  const devTeamPattern = /\b(dev[-\s]?team|coordinator|manager|scrum|scrum[-\s]?master|sprint|agile|alignment|meeting|team|orchestrat|backlog|milestone|todo|ticket|issue|status|kanban)\b/i;
+  const engineerPattern = /\b(engineer|code|program|develop|implement|fix|bug|refactor|function|algorithm|typescript|python|compile|backend|logic|class|method|helper|util|script|main|app)\b/i;
+  const qaPattern = /\b(qa|tester?|verify|validate|falsify|repro|coverage|lint|check|assurance|assertion|expect|audit|safety|security|vulnerability|leak|leakage|diagnostic|health)\b/i;
+  const testRunnerPattern = /\b(run[-\s]?test|test[-\s]?runner|vitest|jest|pytest|npm[-\s]?run[-\s]?test|test[-\s]?suite|mocha|chai|unittest|e2e|integration[-\s]?test|unit[-\s]?test|run[-\s]?test[-\s]?suite|playwright[-\s]?test)\b/i;
+
   const worker2Pattern = /\b(worker[-\s]?2|w2|audit|coverage|verify|validate|falsify|repro)\b/i;
   const worker1Pattern = /\b(worker[-\s]?1|w1|implement|fix|patch|code|build)\b/i;
 
   for (const action of actions) {
-    if (worker2Pattern.test(action)) {
-      worker2.push(action);
-      continue;
+    let matched = false;
+
+    // 1. Check for EXPLICIT tags first (e.g. "@engineer: ...", "[architect] ...", etc.)
+    const tagMatch = action.match(/^\[(dev-team-ai|architect|engineer|qa-tester|test-runner|browser-agent|mcp-agent|worker1|worker2|w1|w2|browser|mcp)\]/i) ||
+                     action.match(/^@(dev-team-ai|architect|engineer|qa-tester|test-runner|browser-agent|mcp-agent|worker1|worker2|w1|w2|browser|mcp)\b/i) ||
+                     action.match(/^\((dev-team-ai|architect|engineer|qa-tester|test-runner|browser-agent|mcp-agent|worker1|worker2|w1|w2|browser|mcp)\)/i) ||
+                     action.match(/^(dev-team-ai|architect|engineer|qa-tester|test-runner|browser-agent|mcp-agent|worker1|worker2|w1|w2|browser|mcp):/i);
+
+    if (tagMatch) {
+      const tag = tagMatch[1].toLowerCase();
+      if (tag === "dev-team-ai" || tag === "devteamai" || tag === "devteam") {
+        assignments["dev-team-ai"].push(action);
+        matched = true;
+      } else if (tag === "architect") {
+        assignments.architect.push(action);
+        matched = true;
+      } else if (tag === "engineer") {
+        assignments.engineer.push(action);
+        matched = true;
+      } else if (tag === "qa-tester" || tag === "qatester") {
+        assignments["qa-tester"].push(action);
+        matched = true;
+      } else if (tag === "test-runner" || tag === "testrunner") {
+        assignments["test-runner"].push(action);
+        matched = true;
+      } else if (tag === "browser-agent" || tag === "browseragent" || tag === "browser") {
+        assignments["browser-agent"].push(action);
+        matched = true;
+      } else if (tag === "mcp-agent" || tag === "mcpagent" || tag === "mcp") {
+        assignments["mcp-agent"].push(action);
+        matched = true;
+      } else if (tag === "worker1" || tag === "w1") {
+        assignments.worker1.push(action);
+        matched = true;
+      } else if (tag === "worker2" || tag === "w2") {
+        assignments.worker2.push(action);
+        matched = true;
+      }
     }
-    if (worker1Pattern.test(action)) {
-      worker1.push(action);
-      continue;
+
+    // 2. If no explicit tag, use a smart scoring algorithm based on keyword patterns
+    if (!matched) {
+      const scores = {
+        "browser-agent": browserPattern.test(action) ? 1 : 0,
+        "mcp-agent": mcpPattern.test(action) ? 1 : 0,
+        architect: architectPattern.test(action) ? 1 : 0,
+        "dev-team-ai": devTeamPattern.test(action) ? 1 : 0,
+        engineer: engineerPattern.test(action) ? 1 : 0,
+        "qa-tester": qaPattern.test(action) ? 1 : 0,
+        "test-runner": testRunnerPattern.test(action) ? 1 : 0,
+      };
+
+      // Find the highest score
+      let highestScore = 0;
+      let bestAgent: keyof typeof scores | null = null;
+      for (const [agent, score] of Object.entries(scores)) {
+        if (score > highestScore) {
+          highestScore = score;
+          bestAgent = agent as keyof typeof scores;
+        }
+      }
+
+      if (highestScore > 0 && bestAgent) {
+        assignments[bestAgent].push(action);
+        matched = true;
+      }
     }
-    // Default ownership is implementation to avoid W1/W2 overlap on ambiguous tasks.
-    worker1.push(action);
+
+    // 3. Fallback routing if no keywords matched
+    if (!matched) {
+      if (worker2Pattern.test(action)) {
+        assignments.worker2.push(action);
+      } else if (worker1Pattern.test(action)) {
+        assignments.worker1.push(action);
+      } else {
+        assignments.worker1.push(action);
+      }
+    }
   }
 
   return {
-    worker1: mergeDirectiveLists([], worker1, 8),
-    worker2: mergeDirectiveLists([], worker2, 8),
+    worker1: mergeDirectiveLists([], assignments.worker1, 8),
+    worker2: mergeDirectiveLists([], assignments.worker2, 8),
+    "dev-team-ai": mergeDirectiveLists([], assignments["dev-team-ai"], 8),
+    architect: mergeDirectiveLists([], assignments.architect, 8),
+    engineer: mergeDirectiveLists([], assignments.engineer, 8),
+    "qa-tester": mergeDirectiveLists([], assignments["qa-tester"], 8),
+    "test-runner": mergeDirectiveLists([], assignments["test-runner"], 8),
+    "browser-agent": mergeDirectiveLists([], assignments["browser-agent"], 8),
+    "mcp-agent": mergeDirectiveLists([], assignments["mcp-agent"], 8),
   };
 }
 
@@ -2932,24 +3037,68 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
 
         const before = fsStore.heuristicSelector || fsStore.lintLoop ? await collectFingerprints(opts.workspace) : new Map();
 
-        const worker1 = await runAgentTask({
-          agentId: "worker1",
-          round,
-          prompt: `${baseW1}${researchSuffix}${batchArtifactSuffix}${worker1DirectiveSuffix}`,
-          outFile: path.join(roundDir, "worker1.md"),
-          workspace: opts.workspace,
-          mode: opts.mode,
-          roundDir,
-          target: "coordinator",
-          execution: roleExecutions.worker1,
+        const w1SubAgents = [
+          { id: "dev-team-ai" as const, key: "dev-team-ai" as const, file: "dev-team-ai.md", defaultPrompt: baseW1 },
+          { id: "architect" as const, key: "architect" as const, file: "architect.md", defaultPrompt: baseW1 },
+          { id: "engineer" as const, key: "engineer" as const, file: "engineer.md", defaultPrompt: baseW1 },
+          { id: "browser-agent" as const, key: "browser-agent" as const, file: "browser-agent.md", defaultPrompt: baseW1 },
+          { id: "mcp-agent" as const, key: "mcp-agent" as const, file: "mcp-agent.md", defaultPrompt: baseW1 },
+        ];
+
+        const activeW1SubAgents = w1SubAgents.filter(sa => nextActionAssignments[sa.key].length > 0);
+
+        const subPromises = activeW1SubAgents.map(async (sa) => {
+          const suffix = [
+            formatDirectiveBlock("PREVIOUS EVALUATOR DIRECTIVES", carryW1Directives),
+            formatDirectiveBlock("ASSIGNED NEXT ACTIONS", nextActionAssignments[sa.key]),
+          ].join("");
+          const saPrompt = await readPrompt(sa.id).catch(() => sa.defaultPrompt);
+          return runAgentTask({
+            agentId: sa.id,
+            round,
+            prompt: `${saPrompt}${researchSuffix}${batchArtifactSuffix}${suffix}`,
+            outFile: path.join(roundDir, sa.file),
+            workspace: opts.workspace,
+            mode: opts.mode,
+            roundDir,
+            target: "coordinator",
+            execution: roleExecutions[sa.id] || roleExecutions.worker1,
+          });
         });
+
+        const [worker1Result, ...subResults] = await Promise.all([
+          runAgentTask({
+            agentId: "worker1",
+            round,
+            prompt: `${baseW1}${researchSuffix}${batchArtifactSuffix}${worker1DirectiveSuffix}`,
+            outFile: path.join(roundDir, "worker1.md"),
+            workspace: opts.workspace,
+            mode: opts.mode,
+            roundDir,
+            target: "coordinator",
+            execution: roleExecutions.worker1,
+          }),
+          ...subPromises
+        ]);
+
+        let mergedText = worker1Result.text;
+        for (let i = 0; i < activeW1SubAgents.length; i++) {
+          const sa = activeW1SubAgents[i];
+          const res = subResults[i];
+          mergedText += `\n\n========================================\nSUB-AGENT OUTPUT: ${sa.id.toUpperCase()}\n========================================\n${res.text}`;
+        }
+
+        const mergedWorker1Result = {
+          ...worker1Result,
+          text: mergedText,
+        };
 
         const after = fsStore.heuristicSelector || fsStore.lintLoop ? await collectFingerprints(opts.workspace) : new Map();
         changedFiles = diffFingerprints(before, after);
         swarmStore.appendEvent({
           type: "workspace.diff",
           round,
-          message: `Worker-1 changed ${changedFiles.length} tracked files.`,
+          message: `Worker-1 and specialized sub-agents changed ${changedFiles.length} tracked files.`,
           metadata: { changedFiles: changedFiles.slice(0, 20) },
         });
 
@@ -2970,7 +3119,7 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
             : lint.command,
         });
 
-        return { nodeId: node.id, status: "completed", retryCount: 0, output: worker1 };
+        return { nodeId: node.id, status: "completed", retryCount: 0, output: mergedWorker1Result };
       }
 
       if (node.id === "evaluator") {
@@ -3021,19 +3170,61 @@ async function runSwarm(opts: { maxRounds: number; workspace: string; mode: RunM
           return { nodeId: node.id, status: "completed", retryCount: 0, output: { text, outFile, sha256: hashText(text), failed: false } };
         }
 
-        const worker2 = await runAgentTask({
-          agentId: "worker2",
-          round,
-          prompt: `${baseW2}${researchSuffix}${batchArtifactSuffix}${worker2DirectiveSuffix}\n\n--- TRACKED CHANGED FILES ---\n${changedFiles.length ? changedFiles.join("\n") : "(not available yet in parallel fan-out)"
-            }\n\n--- WORKER-1 OUTPUT ---\n${worker1Output}`,
-          outFile: path.join(roundDir, "worker2.md"),
-          workspace: opts.workspace,
-          mode: opts.mode,
-          roundDir,
-          target: "coordinator",
-          execution: roleExecutions.worker2,
+        const w2SubAgents = [
+          { id: "qa-tester" as const, key: "qa-tester" as const, file: "qa-tester.md", defaultPrompt: baseW2 },
+          { id: "test-runner" as const, key: "test-runner" as const, file: "test-runner.md", defaultPrompt: baseW2 },
+        ];
+
+        const activeW2SubAgents = w2SubAgents.filter(sa => nextActionAssignments[sa.key].length > 0);
+
+        const subPromises = activeW2SubAgents.map(async (sa) => {
+          const suffix = [
+            formatDirectiveBlock("PREVIOUS EVALUATOR DIRECTIVES", carryW2Directives),
+            formatDirectiveBlock("ASSIGNED NEXT ACTIONS", nextActionAssignments[sa.key]),
+          ].join("");
+          const saPrompt = await readPrompt(sa.id).catch(() => sa.defaultPrompt);
+          return runAgentTask({
+            agentId: sa.id,
+            round,
+            prompt: `${saPrompt}${researchSuffix}${batchArtifactSuffix}${suffix}\n\n--- TRACKED CHANGED FILES ---\n${changedFiles.length ? changedFiles.join("\n") : "(not available yet in parallel fan-out)"}\n\n--- WORKER-1 OUTPUT ---\n${worker1Output}`,
+            outFile: path.join(roundDir, sa.file),
+            workspace: opts.workspace,
+            mode: opts.mode,
+            roundDir,
+            target: "coordinator",
+            execution: roleExecutions[sa.id] || roleExecutions.worker2,
+          });
         });
-        return { nodeId: node.id, status: "completed", retryCount: 0, output: worker2 };
+
+        const [worker2Result, ...subResults] = await Promise.all([
+          runAgentTask({
+            agentId: "worker2",
+            round,
+            prompt: `${baseW2}${researchSuffix}${batchArtifactSuffix}${worker2DirectiveSuffix}\n\n--- TRACKED CHANGED FILES ---\n${changedFiles.length ? changedFiles.join("\n") : "(not available yet in parallel fan-out)"
+              }\n\n--- WORKER-1 OUTPUT ---\n${worker1Output}`,
+            outFile: path.join(roundDir, "worker2.md"),
+            workspace: opts.workspace,
+            mode: opts.mode,
+            roundDir,
+            target: "coordinator",
+            execution: roleExecutions.worker2,
+          }),
+          ...subPromises
+        ]);
+
+        let mergedText = worker2Result.text;
+        for (let i = 0; i < activeW2SubAgents.length; i++) {
+          const sa = activeW2SubAgents[i];
+          const res = subResults[i];
+          mergedText += `\n\n========================================\nSUB-AGENT OUTPUT: ${sa.id.toUpperCase()}\n========================================\n${res.text}`;
+        }
+
+        const mergedWorker2Result = {
+          ...worker2Result,
+          text: mergedText,
+        };
+
+        return { nodeId: node.id, status: "completed", retryCount: 0, output: mergedWorker2Result };
       }
 
       if (node.id === "coordinator") {

@@ -4,7 +4,14 @@ export type AgentId =
   | "worker1"
   | "worker2"
   | "evaluator"
-  | "coordinator";
+  | "coordinator"
+  | "dev-team-ai"
+  | "architect"
+  | "engineer"
+  | "qa-tester"
+  | "test-runner"
+  | "browser-agent"
+  | "mcp-agent";
 
 export type AgentPhase = "idle" | "queued" | "running" | "completed" | "failed";
 export type PdaStage = "perceive" | "decide" | "act";
@@ -259,6 +266,13 @@ export const AGENT_IDS: AgentId[] = [
   "worker2",
   "evaluator",
   "coordinator",
+  "dev-team-ai",
+  "architect",
+  "engineer",
+  "qa-tester",
+  "test-runner",
+  "browser-agent",
+  "mcp-agent",
 ];
 
 export const DEFAULT_FEATURES: SwarmFeatures = {
@@ -335,6 +349,48 @@ export function createAgentDefaults(): Record<AgentId, AgentState> {
     coordinator: {
       id: "coordinator",
       label: "Coordinator",
+      phase: "idle",
+      round: 0,
+    },
+    "dev-team-ai": {
+      id: "dev-team-ai",
+      label: "Dev Team AI",
+      phase: "idle",
+      round: 0,
+    },
+    architect: {
+      id: "architect",
+      label: "Architect",
+      phase: "idle",
+      round: 0,
+    },
+    engineer: {
+      id: "engineer",
+      label: "Engineer",
+      phase: "idle",
+      round: 0,
+    },
+    "qa-tester": {
+      id: "qa-tester",
+      label: "QA Tester",
+      phase: "idle",
+      round: 0,
+    },
+    "test-runner": {
+      id: "test-runner",
+      label: "Test Runner",
+      phase: "idle",
+      round: 0,
+    },
+    "browser-agent": {
+      id: "browser-agent",
+      label: "Browser Agent",
+      phase: "idle",
+      round: 0,
+    },
+    "mcp-agent": {
+      id: "mcp-agent",
+      label: "MCP Agent",
       phase: "idle",
       round: 0,
     },

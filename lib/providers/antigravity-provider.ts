@@ -8,14 +8,14 @@
  *
  * Env vars:
  *   ANTIGRAVITY_BASE_URL  – proxy base URL  (default: http://127.0.0.1:8787/v1)
- *   ANTIGRAVITY_API_KEY   – proxy API key   (default: ag-default)
+ *   ANTIGRAVITY_API_KEY   – proxy API key   (default: apifun)
  */
 
 import type { ProviderConfig, ProviderType } from "./types";
 import { OpenAIProvider } from "./openai-provider";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:8787/v1";
-const DEFAULT_API_KEY = "ag-default";
+const DEFAULT_API_KEY = "apifun";
 
 export class AntigravityProvider extends OpenAIProvider {
   // @ts-expect-error — override const literal 'openai' with 'antigravity'

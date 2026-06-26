@@ -139,25 +139,44 @@ export function detectProviderFromEnv(): ProviderConfig | null {
     return {
       type: "antigravity",
       baseUrl: process.env.ANTIGRAVITY_BASE_URL ?? "http://127.0.0.1:8787/v1",
-      apiKey: process.env.ANTIGRAVITY_API_KEY ?? "ag-default",
+      apiKey: process.env.ANTIGRAVITY_API_KEY ?? "apifun",
       model: process.env.ANTIGRAVITY_MODEL ?? "claude-sonnet-4-5",
     };
   }
 
-  return null;
+  // Fallback to local Hermes OpenAI configuration as default
+  return {
+    type: "openai",
+    apiKey: "apifun",
+    model: process.env.OPENAI_MODEL ?? "gpt-4o",
+    baseUrl: "http://127.0.0.1:8787/v1",
+  };
 }
 
 /**
  * Create provider from environment with fallback
  */
 export function createProviderFromEnv(overrides?: Partial<ProviderConfig>): Provider {
-  const detected = detectProviderFromEnv();
-  if (!detected) {
-    throw new Error(
-      "No AI provider configured. Set Anthropic, OpenAI API/bearer/Gateway/Codex session auth, Gemini/Google auth, or OLLAMA_HOST."
-    );
+  const detected = detectProviderFromEnv() || {
+    type: "openai" as const,
+    apiKey: "apifun",
+    model: process.env.OPENAI_MODEL ?? "gpt-4o",
+    baseUrl: "http://127.0.0.1:8787/v1",
+  };
+  
+  const merged = { ...detected, ...overrides };
+  
+  // Fill in default fallback settings if missing
+  if (merged.type === "openai" && !merged.apiKey && !(merged as any).bearerToken) {
+    merged.apiKey = "apifun";
+    merged.baseUrl = merged.baseUrl ?? "http://127.0.0.1:8787/v1";
   }
-  return createProvider({ ...detected, ...overrides });
+  if (merged.type === "anthropic" && !merged.apiKey) {
+    merged.apiKey = "apifun";
+    merged.baseUrl = merged.baseUrl ?? "http://127.0.0.1:9119";
+  }
+  
+  return createProvider(merged);
 }
 
 /**
@@ -168,12 +187,12 @@ export function getAvailableProviders(): Array<{ type: ProviderType; model: stri
     {
       type: "anthropic",
       model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5",
-      available: Boolean(process.env.ANTHROPIC_API_KEY),
+      available: true, // Fallback to local Hermes is always available
     },
     {
       type: "openai",
       model: process.env.OPENAI_MODEL ?? process.env.OPENAI_SWARM_MODEL ?? "gpt-4o",
-      available: hasOpenAICompatibleAuth(),
+      available: true, // Fallback to local Hermes is always available
     },
     {
       type: "gemini",
@@ -194,7 +213,7 @@ export function getAvailableProviders(): Array<{ type: ProviderType; model: stri
     {
       type: "antigravity",
       model: process.env.ANTIGRAVITY_MODEL ?? "claude-sonnet-4-5",
-      available: Boolean(process.env.ANTIGRAVITY_BASE_URL || process.env.ANTIGRAVITY_API_KEY),
+      available: true,
     },
   ];
 }

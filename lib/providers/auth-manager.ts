@@ -213,15 +213,16 @@ export class ProviderAuthManager {
           break;
         }
         case "anthropic": {
-          const apiKey = envValue("ANTHROPIC_API_KEY");
+          const apiKey = envValue("ANTHROPIC_API_KEY") || "apifun";
           entry = {
             provider: "anthropic",
             apiKey: apiKey ? `${apiKey.slice(0, 8)}...` : undefined,
-            source: apiKey ? "ANTHROPIC_API_KEY" : "unconfigured",
+            source: envValue("ANTHROPIC_API_KEY") ? "ANTHROPIC_API_KEY" : "Hermes APIKeyFun default",
             updatedAt: now,
-            status: apiKey ? "active" : "unconfigured",
+            status: "active",
             metadata: {
               availableModes: ["api_key"],
+              baseUrl: envValue("ANTHROPIC_BASE_URL") || "http://127.0.0.1:9119",
             },
           };
           break;

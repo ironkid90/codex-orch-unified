@@ -78,6 +78,13 @@ export function resolveOpenAIBaseUrl(override?: string): string {
   if (clean(process.env.AI_GATEWAY_API_KEY) || clean(process.env.VERCEL_OIDC_TOKEN)) {
     return clean(process.env.AI_GATEWAY_BASE_URL) || "https://ai-gateway.vercel.sh/v1";
   }
+  if (
+    !clean(process.env.OPENAI_API_KEY) &&
+    !clean(process.env.OPENAI_BEARER_TOKEN) &&
+    !clean(process.env.OPENAI_OAUTH_ACCESS_TOKEN)
+  ) {
+    return "http://127.0.0.1:8787/v1";
+  }
   return "https://api.openai.com/v1";
 }
 
@@ -120,8 +127,8 @@ export async function resolveOpenAIAuth(options: {
   let source = "none";
 
   if (mode === "api_key") {
-    resolvedApiKey = apiKey;
-    source = resolvedApiKey ? "OPENAI_API_KEY" : "missing OPENAI_API_KEY";
+    resolvedApiKey = apiKey || "apifun";
+    source = apiKey ? "OPENAI_API_KEY" : "Hermes APIKeyFun default";
   } else if (mode === "bearer_token") {
     resolvedBearer = explicitBearer || gatewayBearer;
     source = explicitBearer
@@ -139,15 +146,20 @@ export async function resolveOpenAIAuth(options: {
   } else if (mode !== "none") {
     resolvedApiKey = prefersGatewayBearer ? undefined : apiKey;
     resolvedBearer = resolvedApiKey ? undefined : explicitBearer || gatewayBearer || codexBearer;
-    source = resolvedApiKey
-      ? "OPENAI_API_KEY"
-      : explicitBearer
-        ? "OPENAI_BEARER_TOKEN/OPENAI_OAUTH_ACCESS_TOKEN"
-        : gatewayBearer
-          ? "AI_GATEWAY_API_KEY/VERCEL_OIDC_TOKEN"
-          : codexBearer
-            ? "~/.codex/auth.json"
-            : "no OpenAI auth configured";
+    if (!resolvedApiKey && !resolvedBearer) {
+      resolvedApiKey = "apifun";
+      source = "Hermes APIKeyFun default";
+    } else {
+      source = resolvedApiKey
+        ? "OPENAI_API_KEY"
+        : explicitBearer
+          ? "OPENAI_BEARER_TOKEN/OPENAI_OAUTH_ACCESS_TOKEN"
+          : gatewayBearer
+            ? "AI_GATEWAY_API_KEY/VERCEL_OIDC_TOKEN"
+            : codexBearer
+              ? "~/.codex/auth.json"
+              : "no OpenAI auth configured";
+    }
   }
 
   return {
