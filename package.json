@@ -9,7 +9,7 @@
 		"omni": "python scripts/omni_cli.py",
 		"bootstrap": "node scripts/dev/bootstrap.mjs",
 		"doctor": "node scripts/dev/doctor.mjs",
-		"test": "tsx --test tests/**/*.test.ts",
+		"test": "node --input-type=module -e \"import { spawnSync } from 'node:child_process'; import { readdirSync } from 'node:fs'; import { join } from 'node:path'; const walk=(d)=>readdirSync(d,{withFileTypes:true}).flatMap((e)=>{const p=join(d,e.name); return e.isDirectory()?walk(p):p;}); const files=walk('tests').filter((f)=>f.endsWith('.test.ts')).sort(); const r=spawnSync('tsx',['--test',...files],{stdio:'inherit'}); process.exit(r.status ?? 1);\"",
 		"dev": "next dev --port 3017",
 		"dev:dashboard": "next dev --port 3017",
 		"dev:gui": "next dev --port 3017",
