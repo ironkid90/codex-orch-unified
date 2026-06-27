@@ -48,10 +48,14 @@
 		"memory:help": "tsx scripts/memory-refresh.ts help"
 	},
 	"dependencies": {
+		"@ai-sdk/mcp": "^2.0.2",
+		"@ai-sdk/openai": "^4.0.1",
 		"@azure/identity": "^4.13.1",
 		"@azure/storage-blob": "^12.31.0",
+		"@composio/core": "^0.13.1",
 		"@genkit-ai/mcp": "^1.31.0",
 		"@modelcontextprotocol/sdk": "^1.27.1",
+		"ai": "^7.0.3",
 		"ajv": "^8.17.1",
 		"dotenv": "^16.4.5",
 		"lucide-react": "^0.577.0",
