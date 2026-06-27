@@ -15,6 +15,7 @@ import {
 import path from "node:path";
 import OpenAI from "openai";
 import { resolveOpenAIAuth, resolveOpenAIBaseUrl } from "../providers/auth";
+import { providerAuthManager } from "../providers/auth-manager";
 import { IOCoordinator } from "./io-coordinator";
 import { createProvider } from "../providers/factory";
 import type {
@@ -1601,7 +1602,7 @@ function resolveGeminiCompatibleBaseUrl(): string | undefined {
   return undefined;
 }
 
-function buildUnifiedProviderConfig(task: AgentTask, provider: Exclude<ProviderId, "codex" | "gemini">): UnifiedProviderConfig {
+async function buildUnifiedProviderConfig(task: AgentTask, provider: Exclude<ProviderId, "codex" | "gemini">): Promise<UnifiedProviderConfig> {
   const modelOverride = task.execution?.model;
   const maxTokens = parseClampedInt(
     process.env.SWARM_PROVIDER_MAX_OUTPUT_TOKENS,
@@ -1616,17 +1617,6 @@ function buildUnifiedProviderConfig(task: AgentTask, provider: Exclude<ProviderI
       model: modelOverride || process.env.OPENAI_SWARM_MODEL || process.env.OPENAI_MODEL || "gpt-5.4",
       apiKey: process.env.OPENAI_API_KEY,
       baseUrl: resolveOpenAIBaseUrl(process.env.OPENAI_BASE_URL),
-      maxTokens,
-      temperature: 0.2,
-    };
-  }
-
-  if (provider === "gemini") {
-    return {
-      type: "gemini",
-      model: modelOverride || process.env.GEMINI_SWARM_MODEL || process.env.GEMINI_MODEL || "gemini-3.1-flash-preview",
-      apiKey: process.env.GEMINI_API_KEY,
-      baseUrl: resolveGeminiCompatibleBaseUrl(),
       maxTokens,
       temperature: 0.2,
     };
@@ -1667,12 +1657,30 @@ function buildUnifiedProviderConfig(task: AgentTask, provider: Exclude<ProviderI
   }
 
   if (provider === "custom") {
+    // Try to resolve from auth-manager custom providers first (workspace-scoped)
+    const customId = task.execution?.customProviderId || task.execution?.model || task.execution?.baseUrl || "";
+    if (customId) {
+      const customConfig = await providerAuthManager.buildCustomProviderConfig(customId, modelOverride, {
+        workspaceRoot: task.workspace,
+      });
+      if (customConfig) {
+        return {
+          ...customConfig,
+          maxTokens,
+          temperature: 0.2,
+          isCustom: true,
+        };
+      }
+    }
+    // Fallback to execution-level config
     return {
       type: "openai-compatible",
       model: modelOverride || task.execution?.model || "gpt-4o",
       apiKey: task.execution?.apiKey,
       baseUrl: task.execution?.baseUrl,
       headers: task.execution?.headers,
+      authMode: task.execution?.authMode as UnifiedProviderConfig["authMode"],
+      isCustom: true,
       maxTokens,
       temperature: 0.2,
     };
@@ -1736,7 +1744,7 @@ async function runUnifiedProviderTask(
   task: AgentTask,
   providerId: Exclude<ProviderId, "codex" | "gemini">,
 ): Promise<TokenUsage> {
-  const provider = createProvider(buildUnifiedProviderConfig(task, providerId));
+  const provider = createProvider(await buildUnifiedProviderConfig(task, providerId));
   const enableTools = process.env.SWARM_ENABLE_TOOLS !== "0";
   const toolDefinitions = enableTools ? getRegisteredToolDefinitions() : [];
   const maxToolSteps = parseClampedInt(process.env.SWARM_TOOL_MAX_STEPS, DEFAULT_TOOL_MAX_STEPS, 1, 24);

@@ -4,6 +4,14 @@ import { resolveDashboardWorkspace } from "@/lib/swarm/dashboard-workspaces";
 
 export const dynamic = "force-dynamic";
 
+/** Resolve workspace root — fast-path when no workspace param is supplied */
+async function resolveWorkspace(requestedWorkspace: string | null): Promise<string> {
+  if (!requestedWorkspace?.trim()) {
+    return process.cwd();
+  }
+  return resolveDashboardWorkspace({ requestedWorkspace });
+}
+
 /**
  * GET /api/auth/oauth?provider=openai&action=initiate
  * Initiates OAuth flow for a provider.
@@ -12,9 +20,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   const provider = request.nextUrl.searchParams.get("provider");
   const action = request.nextUrl.searchParams.get("action") || "initiate";
-  const workspaceRoot = await resolveDashboardWorkspace({
-    requestedWorkspace: request.nextUrl.searchParams.get("workspace"),
-  });
+  const workspaceRoot = await resolveWorkspace(request.nextUrl.searchParams.get("workspace"));
 
   if (!provider) {
     return NextResponse.json({ error: "Missing required query param: provider" }, { status: 400 });
@@ -89,9 +95,7 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const workspaceRoot = await resolveDashboardWorkspace({
-      requestedWorkspace: request.nextUrl.searchParams.get("workspace"),
-    });
+    const workspaceRoot = await resolveWorkspace(request.nextUrl.searchParams.get("workspace"));
 
     const body = await request.json().catch(() => ({})) as {
       provider?: string;

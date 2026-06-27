@@ -6,15 +6,21 @@ import { resolveDashboardWorkspace } from "@/lib/swarm/dashboard-workspaces";
 
 export const dynamic = "force-dynamic";
 
+/** Resolve workspace root — fast-path when no workspace param is supplied */
+async function resolveWorkspace(requestedWorkspace: string | null): Promise<string> {
+  if (!requestedWorkspace?.trim()) {
+    return process.cwd();
+  }
+  return resolveDashboardWorkspace({ requestedWorkspace });
+}
+
 /**
  * GET /api/auth/custom-providers
  * Returns all registered custom providers.
  */
 export async function GET(request: NextRequest) {
   try {
-    const workspaceRoot = await resolveDashboardWorkspace({
-      requestedWorkspace: request.nextUrl.searchParams.get("workspace"),
-    });
+    const workspaceRoot = await resolveWorkspace(request.nextUrl.searchParams.get("workspace"));
     const customProviders = await providerAuthManager.getCustomProviders({ workspaceRoot });
     return NextResponse.json({ customProviders });
   } catch (error) {
@@ -35,9 +41,7 @@ export async function POST(request: NextRequest) {
   if (authError) return authError;
 
   try {
-    const workspaceRoot = await resolveDashboardWorkspace({
-      requestedWorkspace: request.nextUrl.searchParams.get("workspace"),
-    });
+    const workspaceRoot = await resolveWorkspace(request.nextUrl.searchParams.get("workspace"));
 
     const body = await request.json().catch(() => ({})) as Partial<CustomProviderConfig>;
 
@@ -96,9 +100,7 @@ export async function DELETE(request: NextRequest) {
   if (authError) return authError;
 
   try {
-    const workspaceRoot = await resolveDashboardWorkspace({
-      requestedWorkspace: request.nextUrl.searchParams.get("workspace"),
-    });
+    const workspaceRoot = await resolveWorkspace(request.nextUrl.searchParams.get("workspace"));
     const id = request.nextUrl.searchParams.get("id");
     if (!id) {
       return NextResponse.json({ error: "Missing required query param: id" }, { status: 400 });

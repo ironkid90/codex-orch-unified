@@ -26,6 +26,10 @@ export interface RoleExecutionPreference {
   apiKey?: string;
   /** Optional custom headers for custom providers */
   headers?: Record<string, string>;
+  /** Auth mode for custom providers: api_key | bearer_token | oauth_token | none */
+  authMode?: string;
+  /** Custom provider ID to look up from auth-manager registry */
+  customProviderId?: string;
 }
 
 export interface RoutingConfigFile {
